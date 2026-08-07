@@ -6,6 +6,7 @@ interface AuthContextValue {
   user: User | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
+  activate: (username: string, otp: string, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -37,12 +38,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(me);
   }, []);
 
+  const activate = useCallback(async (username: string, otp: string, newPassword: string) => {
+    const me = await api.post<User>("/auth/activate", { username, otp, newPassword });
+    setUser(me);
+  }, []);
+
   const logout = useCallback(async () => {
     await api.post("/auth/logout");
     setUser(null);
   }, []);
 
-  return <AuthContext.Provider value={{ user, loading, login, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, login, activate, logout }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

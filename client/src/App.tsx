@@ -3,6 +3,7 @@ import { useAuth } from "./context/AuthContext";
 import { Layout } from "./components/Layout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { Login } from "./pages/Login";
+import { Activate } from "./pages/Activate";
 import { NewRequest } from "./pages/NewRequest";
 import { MyRequests } from "./pages/MyRequests";
 import { Queue } from "./pages/Queue";
@@ -27,6 +28,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/activate" element={<Activate />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>

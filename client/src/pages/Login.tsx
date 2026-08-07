@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { ApiError } from "../api/client";
 
@@ -9,6 +9,7 @@ export function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notActivated, setNotActivated] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   if (user) return <Navigate to="/" replace />;
@@ -16,12 +17,18 @@ export function Login() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setNotActivated(false);
     setSubmitting(true);
     try {
       await login(username, password);
       navigate("/");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong");
+      if (err instanceof ApiError) {
+        setError(err.message);
+        setNotActivated(err.code === "NOT_ACTIVATED");
+      } else {
+        setError("Something went wrong");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -53,7 +60,19 @@ export function Login() {
               required
             />
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && (
+            <p className="text-sm text-red-600">
+              {error}
+              {notActivated && (
+                <>
+                  {" "}
+                  <Link to="/activate" className="font-medium underline">
+                    Activate your account
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
           <button
             type="submit"
             disabled={submitting}
@@ -62,6 +81,9 @@ export function Login() {
             {submitting ? "Signing in…" : "Sign in"}
           </button>
         </form>
+        <p className="mt-4 text-center text-sm text-slate-500">
+          New here? <Link to="/activate" className="text-brand-700 hover:underline">Activate your account</Link>
+        </p>
       </div>
     </div>
   );

@@ -89,3 +89,33 @@ Each role sees a different dashboard:
 5. **Assignments**: check the boxes to give each Member rights to the
    query types they should handle. New requests auto-route to whichever
    assigned member currently has the fewest open requests.
+
+## Bulk upload (Plants, Users, Common Questions)
+
+Every admin list page (Plants, Users) and the Common Questions tab has a
+**Bulk upload** panel: download the CSV template for the exact column
+headers expected, fill it in from Excel, and upload it. Each row is
+reported back as `created`, `skipped` (already exists — safe to
+re-upload the same file twice), or `error` (with a reason).
+
+- **Plants**: `name`, `code`
+- **Users**: `name`, `email`, `username`, `role` (`ADMIN`/`MEMBER`/`PLANT_STAFF`),
+  `plantcode` (optional, must match an existing plant's code)
+- **Common Questions**: `question`, `answer`, `querytype` (optional,
+  matched by name)
+
+**Bulk-created users get no password.** Instead each gets a one-time
+6-digit OTP, shown once in the upload results table (and copyable) for
+the admin to relay to that person — nothing is emailed automatically
+since there's no SMTP configured yet (see below). The user visits
+**Activate Account** (linked from the login page), enters their
+username + OTP, and sets their own password. OTPs are valid for 7 days;
+if one expires or is lost, use **Resend OTP** / **Reset via OTP** next
+to that user on the Users page to generate a fresh one. This same flow
+also works as an admin-driven password reset for any existing user.
+
+When you're ready to add SMTP, the OTP is already generated and
+returned from the same `/api/users/bulk` and `/api/users/:id/regenerate-otp`
+endpoints (`server/src/routes/users.ts`) — wire an email send there
+instead of (or in addition to) returning it to the admin, no other
+rework needed.

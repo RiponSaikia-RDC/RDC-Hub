@@ -3,6 +3,8 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { hashPassword } from "../lib/auth";
 import { requireAuth, requireRole } from "../middleware/requireAuth";
+import { bulkSummary, csvUpload, MAX_BULK_ROWS, parseCsv, type BulkResultRow } from "../lib/csv";
+import { generateOtp, otpExpiry } from "../lib/otp";
 
 const router = Router();
 
@@ -13,6 +15,7 @@ const userSelect = {
   username: true,
   role: true,
   active: true,
+  activated: true,
   plantId: true,
   createdAt: true,
   plant: true,
@@ -49,12 +52,123 @@ router.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => {
   const { password, ...rest } = parsed.data;
   try {
     const user = await prisma.user.create({
-      data: { ...rest, passwordHash: await hashPassword(password) },
+      data: { ...rest, passwordHash: await hashPassword(password), activated: true },
       select: userSelect,
     });
     res.status(201).json(user);
   } catch {
     res.status(409).json({ error: "A user with that email or username already exists" });
+  }
+});
+
+const ROLE_VALUES = ["ADMIN", "MEMBER", "PLANT_STAFF"] as const;
+
+// Bulk import via CSV. Expected headers: name, email, username, role, plantcode (optional).
+// Bulk-imported users get NO password — they activate their own account with
+// a one-time OTP (returned here for the admin to relay) on the Activate
+// Account page. See server/src/routes/auth.ts's /activate handler.
+router.post("/bulk", requireAuth, requireRole("ADMIN"), csvUpload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+  let rows: Record<string, string>[];
+  try {
+    rows = parseCsv(req.file.buffer);
+  } catch {
+    return res.status(400).json({ error: "Could not parse that CSV file" });
+  }
+  if (rows.length === 0) return res.status(400).json({ error: "The file has no rows" });
+  if (rows.length > MAX_BULK_ROWS) {
+    return res.status(400).json({ error: `Please upload at most ${MAX_BULK_ROWS} rows at a time` });
+  }
+
+  const [existingUsers, plants] = await Promise.all([
+    prisma.user.findMany({ select: { email: true, username: true } }),
+    prisma.plant.findMany({ select: { id: true, code: true } }),
+  ]);
+  const seenEmails = new Set(existingUsers.map((u) => u.email.toLowerCase()));
+  const seenUsernames = new Set(existingUsers.map((u) => u.username.toLowerCase()));
+  const plantByCode = new Map(plants.map((p) => [p.code.toLowerCase(), p.id]));
+
+  const results: BulkResultRow[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const rowNum = i + 2;
+    const row = rows[i];
+    const name = row.name?.trim();
+    const email = row.email?.trim();
+    const username = row.username?.trim();
+    const roleRaw = row.role?.trim().toUpperCase().replace(/\s+/g, "_");
+    const plantCode = row.plantcode?.trim();
+
+    const base = { row: rowNum, name, email, username };
+
+    if (!name || !email || !username) {
+      results.push({ ...base, status: "error", message: "name, email, and username are all required" });
+      continue;
+    }
+    if (!roleRaw || !ROLE_VALUES.includes(roleRaw as any)) {
+      results.push({ ...base, status: "error", message: `role must be one of ${ROLE_VALUES.join(", ")}` });
+      continue;
+    }
+    let plantId: number | null = null;
+    if (plantCode) {
+      const found = plantByCode.get(plantCode.toLowerCase());
+      if (!found) {
+        results.push({ ...base, status: "error", message: `unknown plant code "${plantCode}"` });
+        continue;
+      }
+      plantId = found;
+    }
+    if (seenEmails.has(email.toLowerCase()) || seenUsernames.has(username.toLowerCase())) {
+      results.push({ ...base, status: "skipped", message: "already exists" });
+      continue;
+    }
+
+    const otp = generateOtp();
+    try {
+      await prisma.user.create({
+        data: {
+          name,
+          email,
+          username,
+          role: roleRaw,
+          plantId,
+          passwordHash: null,
+          activated: false,
+          otpCode: await hashPassword(otp),
+          otpExpiresAt: otpExpiry(),
+        },
+      });
+      seenEmails.add(email.toLowerCase());
+      seenUsernames.add(username.toLowerCase());
+      results.push({ ...base, status: "created", role: roleRaw, otp });
+    } catch {
+      results.push({ ...base, status: "error", message: "could not create this row" });
+    }
+  }
+
+  res.json({ summary: bulkSummary(results), results });
+});
+
+// Admin remediation: (re)generates an OTP for a user, clearing any existing
+// password, so they can activate/reactivate via the Activate Account page.
+// Doubles as an admin-driven "forgot password" reset.
+router.post("/:id/regenerate-otp", requireAuth, requireRole("ADMIN"), async (req, res) => {
+  const id = Number(req.params.id);
+  const otp = generateOtp();
+  try {
+    const user = await prisma.user.update({
+      where: { id },
+      data: {
+        passwordHash: null,
+        activated: false,
+        otpCode: await hashPassword(otp),
+        otpExpiresAt: otpExpiry(),
+      },
+      select: userSelect,
+    });
+    res.json({ user, otp });
+  } catch {
+    res.status(404).json({ error: "User not found" });
   }
 });
 
@@ -74,7 +188,12 @@ router.patch("/:id", requireAuth, requireRole("ADMIN"), async (req, res) => {
 
   const { password, ...rest } = parsed.data;
   const data: Record<string, unknown> = { ...rest };
-  if (password) data.passwordHash = await hashPassword(password);
+  if (password) {
+    data.passwordHash = await hashPassword(password);
+    data.activated = true;
+    data.otpCode = null;
+    data.otpExpiresAt = null;
+  }
 
   try {
     const user = await prisma.user.update({ where: { id }, data, select: userSelect });

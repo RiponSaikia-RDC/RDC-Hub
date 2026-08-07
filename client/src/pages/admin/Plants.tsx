@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, ApiError } from "../../api/client";
-import { Plant } from "../../types";
+import { CsvUploader } from "../../components/CsvUploader";
+import { BulkUploadResponse, Plant } from "../../types";
 
 export function Plants() {
   const [plants, setPlants] = useState<Plant[]>([]);
@@ -39,6 +40,25 @@ export function Plants() {
   return (
     <div>
       <h1 className="mb-4 text-xl font-semibold text-slate-900">Plants</h1>
+
+      <div className="mb-6">
+        <CsvUploader
+          title="Bulk Upload Plants"
+          description='CSV columns: "name", "code". Rows matching an existing plant name or code are skipped.'
+          templateFilename="rdc-hub-plants-template.csv"
+          templateHeaders={["name", "code"]}
+          templateSampleRow={["Plant 4", "PLT4"]}
+          onUpload={(file) => {
+            const form = new FormData();
+            form.append("file", file);
+            return api.post<BulkUploadResponse>("/plants/bulk", form).then((res) => {
+              load();
+              return res;
+            });
+          }}
+        />
+      </div>
+
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="min-w-full divide-y divide-slate-200 text-sm">

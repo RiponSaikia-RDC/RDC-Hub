@@ -2,7 +2,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { FaqEntry, QueryType, ServiceRequest } from "../types";
+import { CsvUploader } from "../components/CsvUploader";
+import { BulkUploadResponse, FaqEntry, QueryType, ServiceRequest } from "../types";
 
 export function Faq() {
   const { user } = useAuth();
@@ -85,6 +86,26 @@ export function Faq() {
             </button>
           )}
         </div>
+
+        {canManage && (
+          <div className="mb-4">
+            <CsvUploader
+              title="Bulk Upload Common Questions"
+              description='CSV columns: "question", "answer", "querytype" (optional, matched by name). Rows with a question that already exists are skipped.'
+              templateFilename="rdc-hub-faq-template.csv"
+              templateHeaders={["question", "answer", "querytype"]}
+              templateSampleRow={["How do I report a delayed truck?", "Submit a request under Transport Delay with the PO number.", "Transport Delay"]}
+              onUpload={(file) => {
+                const form = new FormData();
+                form.append("file", file);
+                return api.post<BulkUploadResponse>("/faq/bulk", form).then((res) => {
+                  loadEntries();
+                  return res;
+                });
+              }}
+            />
+          </div>
+        )}
 
         {showForm && (
           <form onSubmit={handleCreate} className="mb-4 space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

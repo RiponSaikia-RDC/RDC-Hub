@@ -35,9 +35,19 @@ model User {
   name         String
   email        String   @unique
   username     String   @unique
-  passwordHash String
+  // Null until the user activates their account. Bulk-imported users are
+  // created with no password; they set one themselves via a one-time OTP
+  // (see otpCode/otpExpiresAt) on the Activate Account page.
+  passwordHash String?
   role         String   @default("PLANT_STAFF")
   active       Boolean  @default(true)
+  // False for a bulk-imported user until they've completed OTP activation.
+  // Admin-created (single-add) users are activated immediately.
+  activated    Boolean  @default(true)
+  // Hashed OTP (never stored in plaintext) + its expiry. Set whenever a
+  // user is bulk-imported or an admin triggers "reset via OTP".
+  otpCode      String?
+  otpExpiresAt DateTime?
   plantId      Int?
   createdAt    DateTime @default(now())
 

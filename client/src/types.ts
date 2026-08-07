@@ -21,6 +21,8 @@ export interface User {
   username: string;
   role: Role;
   active: boolean;
+  // False for a bulk-imported user until they complete OTP activation.
+  activated: boolean;
   plantId: number | null;
   plant?: Plant | null;
 }
@@ -73,4 +75,16 @@ export interface QueryTypeAssignment {
   id: number;
   user: { id: number; name: string };
   queryType: { id: number; name: string };
+}
+
+export interface BulkResultRow {
+  row: number;
+  status: "created" | "skipped" | "error";
+  message?: string;
+  [key: string]: unknown;
+}
+
+export interface BulkUploadResponse {
+  summary: { created: number; skipped: number; errors: number };
+  results: BulkResultRow[];
 }
