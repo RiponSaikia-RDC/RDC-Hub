@@ -12,18 +12,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role {
-  ADMIN
-  MEMBER
-  PLANT_STAFF
-}
-
-enum RequestStatus {
-  OPEN
-  IN_PROGRESS
-  RESOLVED
-  CLOSED
-}
+// SQLite has no native enum support in Prisma, so Role and status are
+// plain strings here, validated at the application layer (see zod schemas
+// in server/src/routes and the Role/RequestStatus unions in
+// client/src/types.ts). Switching to SQL Server/Postgres later, these
+// could be promoted to real `enum` types if desired, but isn't required.
+// Role: "ADMIN" | "MEMBER" | "PLANT_STAFF"
+// RequestStatus: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "CLOSED"
 
 model Plant {
   id        Int      @id @default(autoincrement())
@@ -41,7 +36,7 @@ model User {
   email        String   @unique
   username     String   @unique
   passwordHash String
-  role         Role     @default(PLANT_STAFF)
+  role         String   @default("PLANT_STAFF")
   active       Boolean  @default(true)
   plantId      Int?
   createdAt    DateTime @default(now())
@@ -84,7 +79,7 @@ model ServiceRequest {
   ticketNumber  String        @unique
   subject       String
   body          String
-  status        RequestStatus @default(OPEN)
+  status        String        @default("OPEN")
   queryTypeId   Int
   plantId       Int
   requesterId   Int
