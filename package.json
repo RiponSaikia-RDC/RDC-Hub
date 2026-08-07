@@ -1,0 +1,21 @@
+{
+  "name": "rdc-hub",
+  "private": true,
+  "version": "1.0.0",
+  "description": "RDC Hub - Logistics Service Request Platform",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w client && npm run build -w server",
+    "start": "npm run start -w server",
+    "prisma:migrate": "npm run prisma:migrate -w server",
+    "prisma:seed": "npm run prisma:seed -w server",
+    "setup": "npm install && npm run prisma:migrate && npm run prisma:seed"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

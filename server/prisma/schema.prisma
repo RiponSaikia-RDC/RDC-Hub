@@ -1,0 +1,147 @@
+// RDC Hub data model.
+// Dev/test DB is SQLite (file-based, zero setup). To move to the company
+// server, change `provider` to "sqlserver" or "postgresql" and set
+// DATABASE_URL accordingly in .env — the rest of the schema (and every
+// query in the app) stays the same.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+  PLANT_STAFF
+}
+
+enum RequestStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model Plant {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  code      String   @unique
+  createdAt DateTime @default(now())
+
+  users    User[]
+  requests ServiceRequest[]
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  role         Role     @default(PLANT_STAFF)
+  active       Boolean  @default(true)
+  plantId      Int?
+  createdAt    DateTime @default(now())
+
+  plant                Plant?               @relation(fields: [plantId], references: [id])
+  queryTypeAssignments QueryTypeAssignment[]
+  requestsSubmitted    ServiceRequest[]      @relation("Requester")
+  requestsAssigned     ServiceRequest[]      @relation("Assignee")
+  comments             Comment[]
+  attachments          Attachment[]
+  faqEntries           FaqEntry[]
+}
+
+model QueryType {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  assignments QueryTypeAssignment[]
+  requests    ServiceRequest[]
+  faqEntries  FaqEntry[]
+}
+
+model QueryTypeAssignment {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  queryTypeId Int
+  createdAt   DateTime @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  queryType QueryType @relation(fields: [queryTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, queryTypeId])
+}
+
+model ServiceRequest {
+  id            Int           @id @default(autoincrement())
+  ticketNumber  String        @unique
+  subject       String
+  body          String
+  status        RequestStatus @default(OPEN)
+  queryTypeId   Int
+  plantId       Int
+  requesterId   Int
+  assignedToId  Int?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  resolvedAt    DateTime?
+
+  queryType   QueryType    @relation(fields: [queryTypeId], references: [id])
+  plant       Plant        @relation(fields: [plantId], references: [id])
+  requester   User         @relation("Requester", fields: [requesterId], references: [id])
+  assignedTo  User?        @relation("Assignee", fields: [assignedToId], references: [id])
+  comments    Comment[]
+  attachments Attachment[]
+  faqEntries  FaqEntry[]
+}
+
+model Comment {
+  id        Int      @id @default(autoincrement())
+  srId      Int
+  authorId  Int
+  body      String
+  createdAt DateTime @default(now())
+
+  serviceRequest ServiceRequest @relation(fields: [srId], references: [id], onDelete: Cascade)
+  author         User           @relation(fields: [authorId], references: [id])
+  attachments    Attachment[]
+}
+
+model Attachment {
+  id           Int      @id @default(autoincrement())
+  srId         Int
+  commentId    Int?
+  filename     String
+  storedPath   String
+  mimeType     String
+  size         Int
+  uploadedById Int
+  createdAt    DateTime @default(now())
+
+  serviceRequest ServiceRequest @relation(fields: [srId], references: [id], onDelete: Cascade)
+  comment        Comment?       @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  uploadedBy     User           @relation(fields: [uploadedById], references: [id])
+}
+
+model FaqEntry {
+  id          Int      @id @default(autoincrement())
+  question    String
+  answer      String
+  queryTypeId Int?
+  sourceSrId  Int?
+  createdById Int
+  viewCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  queryType   QueryType?      @relation(fields: [queryTypeId], references: [id])
+  sourceSr    ServiceRequest? @relation(fields: [sourceSrId], references: [id])
+  createdBy   User            @relation(fields: [createdById], references: [id])
+}
