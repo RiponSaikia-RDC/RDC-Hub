@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma";
 import { requireAuth } from "../middleware/requireAuth";
 import { nextTicketNumber } from "../lib/ticketNumber";
 import { pickAssignee } from "../lib/assignmentPicker";
+import { sendReply } from "../lib/gmail";
 
 const router = Router();
 
@@ -62,31 +63,34 @@ router.post("/", requireAuth, async (req, res) => {
 router.get("/", requireAuth, async (req, res) => {
   const { status, queryTypeId, plantId, search, mine } = req.query as Record<string, string | undefined>;
 
-  const where: Record<string, unknown> = {};
-  if (status) where.status = status;
-  if (queryTypeId) where.queryTypeId = Number(queryTypeId);
-  if (plantId) where.plantId = Number(plantId);
+  // Built as a list of AND-ed conditions (rather than one flat object) so
+  // the free-text search's own OR clause and the role-based visibility OR
+  // clause below don't clobber each other.
+  const and: Record<string, unknown>[] = [];
+  if (status) and.push({ status });
+  if (queryTypeId) and.push({ queryTypeId: Number(queryTypeId) });
+  if (plantId) and.push({ plantId: Number(plantId) });
   if (search) {
-    where.OR = [
-      { subject: { contains: search } },
-      { ticketNumber: { contains: search } },
-    ];
+    and.push({ OR: [{ subject: { contains: search } }, { ticketNumber: { contains: search } }] });
   }
 
   if (req.user!.role === "PLANT_STAFF") {
-    where.requesterId = req.user!.id;
+    and.push({ requesterId: req.user!.id });
   } else if (req.user!.role === "MEMBER") {
     if (mine === "0") {
       // explicit opt-out not offered to members beyond their own queue
     }
-    where.assignedToId = req.user!.id;
+    // Their own queue, plus anything unassigned — e.g. an inbound email
+    // that matched no keyword lands here for any member to see and claim
+    // (see the "teach routing" flow on the request detail page).
+    and.push({ OR: [{ assignedToId: req.user!.id }, { assignedToId: null }] });
   } else if (req.user!.role === "ADMIN" && mine === "1") {
-    where.requesterId = req.user!.id;
+    and.push({ requesterId: req.user!.id });
   }
   // ADMIN with no `mine` filter sees everything, including unassigned.
 
   const requests = await prisma.serviceRequest.findMany({
-    where,
+    where: and.length ? { AND: and } : {},
     orderBy: { createdAt: "desc" },
     include: {
       queryType: { select: { id: true, name: true } },
@@ -104,7 +108,9 @@ function canView(
 ) {
   if (user.role === "ADMIN") return true;
   if (user.role === "PLANT_STAFF") return sr.requesterId === user.id;
-  if (user.role === "MEMBER") return sr.assignedToId === user.id;
+  // Members can see their own queue plus anything unclaimed, so they can
+  // act on it (claim it, or teach a keyword mapping for next time).
+  if (user.role === "MEMBER") return sr.assignedToId === user.id || sr.assignedToId === null;
   return false;
 }
 
@@ -119,6 +125,10 @@ router.get("/:id", requireAuth, async (req, res) => {
 const updateSchema = z.object({
   status: z.enum(["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]).optional(),
   assignedToId: z.number().int().nullable().optional(),
+  // Lets whoever's handling a request (or claiming an unassigned one)
+  // correct its category — useful right after teaching a keyword mapping
+  // for a request that had matched nothing. See queryTypes.ts's /:id/learn.
+  queryTypeId: z.number().int().optional(),
 });
 
 router.patch("/:id", requireAuth, async (req, res) => {
@@ -130,12 +140,20 @@ router.patch("/:id", requireAuth, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: "Invalid data" });
 
   const isAdmin = req.user!.role === "ADMIN";
+  const isMember = req.user!.role === "MEMBER";
   const isAssignee = sr.assignedToId === req.user!.id;
-  if (!isAdmin && !isAssignee) {
+  const isUnclaimed = sr.assignedToId === null;
+
+  if (!isAdmin && !isAssignee && !(isMember && isUnclaimed)) {
     return res.status(403).json({ error: "Only the assigned member or an admin can update this request" });
   }
   if (parsed.data.assignedToId !== undefined && !isAdmin) {
-    return res.status(403).json({ error: "Only an admin can reassign a request" });
+    // Any member may claim/assign a request that's currently unassigned
+    // (e.g. a no-keyword-match email) — to themselves or a colleague. Only
+    // an admin may reassign one that's already someone else's.
+    if (!isMember || !isUnclaimed) {
+      return res.status(403).json({ error: "Only an admin can reassign a request that's already assigned to someone" });
+    }
   }
 
   const data: Record<string, unknown> = { ...parsed.data };
@@ -147,11 +165,29 @@ router.patch("/:id", requireAuth, async (req, res) => {
   res.json(updated);
 });
 
-const commentSchema = z.object({ body: z.string().min(1) });
+const commentSchema = z.object({
+  body: z.string().min(1),
+  // Extra recipients to Cc on this reply, on top of whoever was on the
+  // original email's To/Cc — comma/semicolon/whitespace separated.
+  cc: z.string().optional(),
+});
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function parseEmailList(raw?: string | null): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[,;\s]+/)
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => EMAIL_RE.test(e));
+}
 
 router.post("/:id/comments", requireAuth, async (req, res) => {
   const id = Number(req.params.id);
-  const sr = await prisma.serviceRequest.findUnique({ where: { id } });
+  const sr = await prisma.serviceRequest.findUnique({
+    where: { id },
+    include: { requester: { select: { name: true, email: true } } },
+  });
   if (!sr) return res.status(404).json({ error: "Request not found" });
   if (!canView(req.user!, sr)) return res.status(403).json({ error: "You don't have access to this request" });
 
@@ -162,6 +198,46 @@ router.post("/:id/comments", requireAuth, async (req, res) => {
     data: { srId: id, authorId: req.user!.id, body: parsed.data.body },
     include: { author: { select: { id: true, name: true, role: true } }, attachments: true },
   });
+
+  // This ticket originated by email — send the reply back to the plant
+  // staff member's inbox too, threaded under the original conversation.
+  // A send failure is logged but never blocks the in-app reply.
+  if (sr.source === "EMAIL" && sr.gmailThreadId) {
+    try {
+      const hubEmail = (process.env.GMAIL_HUB_EMAIL || "").toLowerCase();
+      // Carry forward everyone who was on the original email's To/Cc
+      // (minus the hub address itself and the primary requester, who's
+      // already the "To" here), plus whatever the replying member added.
+      const autoCc = [...parseEmailList(sr.originalToRaw), ...parseEmailList(sr.originalCcRaw)];
+      const manualCc = parseEmailList(parsed.data.cc);
+      const cc = Array.from(new Set([...autoCc, ...manualCc])).filter(
+        (e) => e !== hubEmail && e !== sr.requester.email.toLowerCase()
+      );
+
+      // Keep the original triggering email quoted below the new reply,
+      // like a normal mail client reply would.
+      const quotedHeader = `On ${sr.createdAt.toUTCString()}, ${sr.requester.name} <${sr.requester.email}> wrote:`;
+      const quotedBody = sr.body
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n");
+      const text = `${parsed.data.body}\n\n${quotedHeader}\n${quotedBody}`;
+
+      const { messageId } = await sendReply({
+        threadId: sr.gmailThreadId,
+        to: sr.requester.email,
+        cc,
+        subject: `[${sr.ticketNumber}] Re: ${sr.subject}`,
+        text,
+        inReplyTo: sr.lastEmailMessageId,
+        references: sr.lastEmailMessageId,
+      });
+      await prisma.serviceRequest.update({ where: { id }, data: { lastEmailMessageId: messageId } });
+    } catch (err) {
+      console.error(`[requests] Could not email reply for SR ${sr.ticketNumber}:`, err);
+    }
+  }
+
   res.status(201).json(comment);
 });
 

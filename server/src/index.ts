@@ -13,6 +13,8 @@ import assignmentRoutes from "./routes/assignments";
 import requestRoutes from "./routes/requests";
 import attachmentRoutes from "./routes/attachments";
 import faqRoutes from "./routes/faq";
+import adminRoutes from "./routes/admin";
+import { startEmailPoller } from "./lib/emailPoller";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -35,6 +37,7 @@ app.use("/api/assignments", assignmentRoutes);
 app.use("/api/requests", requestRoutes);
 app.use("/api", attachmentRoutes); // mounts /api/requests/:id/attachments and /api/attachments/:id/download
 app.use("/api/faq", faqRoutes);
+app.use("/api/admin", adminRoutes);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
@@ -55,4 +58,5 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 app.listen(PORT, () => {
   console.log(`RDC Hub server listening on http://localhost:${PORT}`);
+  startEmailPoller();
 });

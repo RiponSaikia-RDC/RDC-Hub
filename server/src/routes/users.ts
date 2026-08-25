@@ -5,6 +5,28 @@ import { hashPassword } from "../lib/auth";
 import { requireAuth, requireRole } from "../middleware/requireAuth";
 import { bulkSummary, csvUpload, MAX_BULK_ROWS, parseCsv, type BulkResultRow } from "../lib/csv";
 import { generateOtp, otpExpiry } from "../lib/otp";
+import { sendMail } from "../lib/gmail";
+
+// OTP is still always returned in the API response / shown in the admin UI
+// too (see CsvUploader / the otpBanner in Users.tsx) — email delivery is a
+// convenience on top, not the only way to get it, in case Gmail intake
+// isn't configured or the send fails.
+async function emailOtp(to: string, name: string, username: string, otp: string) {
+  try {
+    await sendMail({
+      to,
+      subject: "Your RDC Hub account — activation code",
+      text:
+        `Hi ${name},\n\n` +
+        `An RDC Hub account was created for you.\n\n` +
+        `Username: ${username}\n` +
+        `One-time code: ${otp}\n\n` +
+        `Go to the RDC Hub login page, click "Activate Account", and enter your username and this code to set your own password. This code is valid for 7 days.\n`,
+    });
+  } catch (err) {
+    console.error(`[users] Could not email OTP to ${to}:`, err);
+  }
+}
 
 const router = Router();
 
@@ -40,7 +62,10 @@ const createSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   username: z.string().min(3),
-  password: z.string().min(6),
+  // Not required for PLANT_STAFF — that role never logs in to the Hub
+  // (interacts by email only, see server/src/lib/emailPoller.ts), so these
+  // are directory records rather than login accounts.
+  password: z.string().min(6).optional(),
   role: z.enum(["ADMIN", "MEMBER", "PLANT_STAFF"]),
   plantId: z.number().int().optional().nullable(),
 });
@@ -50,9 +75,18 @@ router.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid data" });
 
   const { password, ...rest } = parsed.data;
+  if (rest.role !== "PLANT_STAFF" && !password) {
+    return res.status(400).json({ error: "Password is required for Admin/Member accounts" });
+  }
+
   try {
     const user = await prisma.user.create({
-      data: { ...rest, passwordHash: await hashPassword(password), activated: true },
+      data: {
+        ...rest,
+        passwordHash: password ? await hashPassword(password) : null,
+        // Nothing to activate for Plant Staff (no login, no OTP flow).
+        activated: true,
+      },
       select: userSelect,
     });
     res.status(201).json(user);
@@ -123,7 +157,11 @@ router.post("/bulk", requireAuth, requireRole("ADMIN"), csvUpload.single("file")
       continue;
     }
 
-    const otp = generateOtp();
+    // Plant Staff never log in (email is their channel — see
+    // server/src/lib/emailPoller.ts), so they skip the OTP dance entirely
+    // and are directory records from the moment they're created.
+    const isPlantStaff = roleRaw === "PLANT_STAFF";
+    const otp = isPlantStaff ? null : generateOtp();
     try {
       await prisma.user.create({
         data: {
@@ -133,14 +171,15 @@ router.post("/bulk", requireAuth, requireRole("ADMIN"), csvUpload.single("file")
           role: roleRaw,
           plantId,
           passwordHash: null,
-          activated: false,
-          otpCode: await hashPassword(otp),
-          otpExpiresAt: otpExpiry(),
+          activated: isPlantStaff,
+          otpCode: otp ? await hashPassword(otp) : null,
+          otpExpiresAt: otp ? otpExpiry() : null,
         },
       });
       seenEmails.add(email.toLowerCase());
       seenUsernames.add(username.toLowerCase());
-      results.push({ ...base, status: "created", role: roleRaw, otp });
+      if (otp) await emailOtp(email, name, username, otp);
+      results.push({ ...base, status: "created", role: roleRaw, otp: otp ?? undefined });
     } catch {
       results.push({ ...base, status: "error", message: "could not create this row" });
     }
@@ -166,6 +205,7 @@ router.post("/:id/regenerate-otp", requireAuth, requireRole("ADMIN"), async (req
       },
       select: userSelect,
     });
+    await emailOtp(user.email, user.name, user.username, otp);
     res.json({ user, otp });
   } catch {
     res.status(404).json({ error: "User not found" });

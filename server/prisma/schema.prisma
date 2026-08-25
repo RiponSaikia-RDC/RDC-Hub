@@ -65,6 +65,14 @@ model QueryType {
   name        String   @unique
   description String?
   active      Boolean  @default(true)
+  // Comma-separated keywords matched (case-insensitive, substring) against
+  // the subject+body of inbound emails to auto-route them to this query
+  // type. See server/src/lib/emailRouter.ts.
+  keywords    String?
+  // At most one QueryType should have this true — it's the fallback query
+  // type for inbound emails that match no keywords. Enforced in
+  // server/src/routes/queryTypes.ts (setting one unsets the others).
+  isEmailDefault Boolean @default(false)
   createdAt   DateTime @default(now())
 
   assignments QueryTypeAssignment[]
@@ -94,6 +102,27 @@ model ServiceRequest {
   plantId       Int
   requesterId   Int
   assignedToId  Int?
+  // "WEB" (created via the New Request form) or "EMAIL" (created by the
+  // email poller from an inbound message). See server/src/lib/emailPoller.ts.
+  source        String        @default("WEB")
+  // Gmail's own thread id — how inbound replies get matched back to this
+  // ticket. Only set for source="EMAIL".
+  gmailThreadId String?       @unique
+  // RFC822 Message-ID header of the most recent message in the thread
+  // (inbound or outbound), used to set In-Reply-To/References when
+  // replying so mail clients thread correctly.
+  lastEmailMessageId String?
+  // False when this ticket was created from an inbound email that matched
+  // no QueryType keyword (routed to the isEmailDefault fallback and left
+  // unassigned instead of auto-picked). Drives the "teach routing" panel
+  // on the request detail page. Always true for source="WEB".
+  keywordMatched Boolean     @default(true)
+  // Raw comma-separated email addresses from the triggering inbound
+  // message's To/Cc headers (source="EMAIL" only) — carried forward as Cc
+  // on outbound replies so everyone on the original thread stays looped
+  // in. See server/src/lib/gmail.ts.
+  originalToRaw  String?
+  originalCcRaw  String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   resolvedAt    DateTime?
@@ -112,6 +141,12 @@ model Comment {
   srId      Int
   authorId  Int
   body      String
+  // "WEB" (posted from the Hub UI) or "EMAIL" (an inbound reply picked up
+  // by the email poller).
+  source    String   @default("WEB")
+  // Gmail internal message id of the inbound message this comment came
+  // from (source="EMAIL" only) — dedupe key, see ProcessedEmail.
+  gmailMessageId String? @unique
   createdAt DateTime @default(now())
 
   serviceRequest ServiceRequest @relation(fields: [srId], references: [id], onDelete: Cascade)
@@ -149,4 +184,22 @@ model FaqEntry {
   queryType   QueryType?      @relation(fields: [queryTypeId], references: [id])
   sourceSr    ServiceRequest? @relation(fields: [sourceSrId], references: [id])
   createdBy   User            @relation(fields: [createdById], references: [id])
+}
+
+// Dedupe log for the Gmail poller: every inbound message id that has
+// already been turned into a ServiceRequest or Comment, so a repeated
+// poll (e.g. if marking a message read fails/races) never double-creates.
+model ProcessedEmail {
+  id             Int      @id @default(autoincrement())
+  gmailMessageId String   @unique
+  processedAt    DateTime @default(now())
+}
+
+// Single-row status table the admin UI reads to show whether email intake
+// is configured and working. Always id=1, upserted every poll.
+model EmailSyncStatus {
+  id            Int       @id @default(1)
+  lastPollAt    DateTime?
+  lastSuccessAt DateTime?
+  lastError     String?
 }

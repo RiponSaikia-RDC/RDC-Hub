@@ -39,6 +39,14 @@ router.post("/login", async (req, res) => {
   const user = await prisma.user.findUnique({ where: { username } });
   if (!user || !user.active) return res.status(401).json({ error: "Invalid username or password" });
 
+  // Plant Staff interact with RDC Hub by email only — see
+  // server/src/lib/emailPoller.ts / gmail.ts — and never get Hub login.
+  if (user.role === "PLANT_STAFF") {
+    return res.status(403).json({
+      error: `Plant Staff accounts don't have Hub access. Please email ${process.env.GMAIL_HUB_EMAIL || "your RDC Hub contact"} instead.`,
+    });
+  }
+
   if (!user.passwordHash) {
     return res.status(401).json({
       error: "This account hasn't been activated yet. Use the Activate Account page with the OTP you were given.",
@@ -80,7 +88,7 @@ router.post("/activate", async (req, res) => {
   const { username, otp, newPassword } = parsed.data;
   const user = await prisma.user.findUnique({ where: { username } });
 
-  if (!user || !user.active || !user.otpCode || !user.otpExpiresAt) {
+  if (!user || !user.active || !user.otpCode || !user.otpExpiresAt || user.role === "PLANT_STAFF") {
     return res.status(400).json({ error: "Invalid username or OTP" });
   }
   if (user.otpExpiresAt.getTime() < Date.now()) {
