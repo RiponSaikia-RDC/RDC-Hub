@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, ApiError } from "../api/client";
+import { api, API_BASE, ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { StatusBadge } from "../components/StatusBadge";
 import { QueryType, RequestStatus, ServiceRequest, User } from "../types";
@@ -200,7 +200,7 @@ export function RequestDetail() {
               {sr.attachments.map((a) => (
                 <a
                   key={a.id}
-                  href={`/api/attachments/${a.id}/download`}
+                  href={`${API_BASE}/api/attachments/${a.id}/download`}
                   className="rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
                 >
                   📎 {a.filename}
@@ -284,7 +284,7 @@ export function RequestDetail() {
                       {c.attachments.map((a) => (
                         <a
                           key={a.id}
-                          href={`/api/attachments/${a.id}/download`}
+                          href={`${API_BASE}/api/attachments/${a.id}/download`}
                           className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
                         >
                           📎 {a.filename}

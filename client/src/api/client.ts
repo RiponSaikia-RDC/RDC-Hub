@@ -14,7 +14,12 @@ export class ApiError extends Error {
 // value (see vite.config.ts) - "/" by default (standalone dev/prod), or
 // "/hub/" when built for the unified RDC Dashboard. Deriving the API
 // prefix from it keeps this file working unmodified in both setups.
-const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+// Exported so pages that need a raw URL rather than going through
+// api.get/post/etc. (e.g. an <a href> to a file download) can still land
+// under the right prefix — a hardcoded "/api/..." works standalone but
+// 404s under RDC Nexus's "/hub/" mount, since it resolves against the
+// Nexus root instead. See RequestDetail.tsx's attachment links.
+export const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}/api${path}`, {

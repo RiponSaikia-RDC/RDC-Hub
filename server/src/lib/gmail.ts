@@ -11,6 +11,7 @@
 import crypto from "crypto";
 import { google, gmail_v1 } from "googleapis";
 import { simpleParser, ParsedMail, AddressObject } from "mailparser";
+import { convert as htmlToText } from "html-to-text";
 import MailComposer = require("nodemailer/lib/mail-composer");
 
 const CLIENT_ID = process.env.GMAIL_CLIENT_ID;
@@ -95,6 +96,27 @@ export async function listUnreadInboxMessages(): Promise<{ id: string; threadId:
   return (res.data.messages ?? []).map((m) => ({ id: m.id!, threadId: m.threadId! }));
 }
 
+/** Converts an HTML email body to plain text ourselves, rather than trusting
+ * whichever plain-text alternative (if any) the sender's mail client
+ * shipped alongside it. This matters because Outlook's own HTML->plain-text
+ * downgrade renders bold/underline as literal `*word*`/`_word_` markers
+ * (its long-standing Rich-Text-to-plain-text convention) — harmless in an
+ * actual mail client that re-renders them, but confusing shown verbatim in
+ * the Hub's plain "whatever's in the body" display. Converting the HTML
+ * part ourselves with a converter that doesn't add those markers, and that
+ * drops images/hrefs (a corporate signature's logo and tracking links are
+ * noise here, not content — see the broken-looking bracketed URL a raw
+ * conversion would otherwise leave behind), gives a clean read instead. */
+function htmlToPlainText(html: string): string {
+  return htmlToText(html, {
+    wordwrap: false, // let emailFormat.ts's own paragraph handling apply, not this library's
+    selectors: [
+      { selector: "a", options: { ignoreHref: true } },
+      { selector: "img", format: "skip" },
+    ],
+  });
+}
+
 /** Fetches and parses one message. Uses format=raw + mailparser rather than
  * hand-walking Gmail's MIME payload tree, so multipart/attachments/encoding
  * are handled for us. */
@@ -114,11 +136,16 @@ export async function getMessageRaw(id: string): Promise<InboundEmail> {
     contentType: a.contentType,
   }));
 
+  // Prefer converting the HTML part ourselves (see htmlToPlainText above)
+  // over whatever text/plain alternative the sender's client attached —
+  // falling back to that alternative only when there's no HTML part at all.
+  const text = parsed.html ? htmlToPlainText(parsed.html) : (parsed.text ?? "");
+
   return {
     gmailMessageId: id,
     threadId: res.data.threadId ?? id,
     subject: parsed.subject ?? "(no subject)",
-    text: (parsed.text ?? "").trim(),
+    text: text.trim(),
     fromName: fromAddr?.name || fromAddr?.address || "Unknown",
     fromEmail: (fromAddr?.address || "").toLowerCase(),
     date: parsed.date,
