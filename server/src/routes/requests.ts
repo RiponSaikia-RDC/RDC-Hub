@@ -1,12 +1,22 @@
 import { Router } from "express";
+import path from "path";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { requireAuth } from "../middleware/requireAuth";
 import { nextTicketNumber } from "../lib/ticketNumber";
 import { pickAssignee } from "../lib/assignmentPicker";
-import { sendReply } from "../lib/gmail";
+import { sendReply, OutboundAttachment } from "../lib/gmail";
+import { buildReplyHtml } from "../lib/emailFormat";
+import { UPLOAD_DIR, upload } from "../lib/uploads";
 
 const router = Router();
+
+// Gmail caps total outbound message size (body + all attachments) at 25MB.
+// Stay comfortably under that — if a reply's attachments exceed this, they
+// still get saved and stay downloadable in the Hub, but aren't attached to
+// the outbound email itself (with a note added to the email body instead of
+// a failed/bounced send).
+const MAX_EMAIL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 const detailInclude = {
   queryType: true,
@@ -182,7 +192,7 @@ function parseEmailList(raw?: string | null): string[] {
     .filter((e) => EMAIL_RE.test(e));
 }
 
-router.post("/:id/comments", requireAuth, async (req, res) => {
+router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, res) => {
   const id = Number(req.params.id);
   const sr = await prisma.serviceRequest.findUnique({
     where: { id },
@@ -198,6 +208,30 @@ router.post("/:id/comments", requireAuth, async (req, res) => {
     data: { srId: id, authorId: req.user!.id, body: parsed.data.body },
     include: { author: { select: { id: true, name: true, role: true } }, attachments: true },
   });
+
+  // Files attached to this reply — same upload mechanics as
+  // routes/attachments.ts (multer already wrote them to UPLOAD_DIR;
+  // there's just a DB record to create here), any type accepted (Excel,
+  // PDF, images, ...), same as an inbound email attachment would be.
+  const files = (req.files as Express.Multer.File[]) || [];
+  if (files.length > 0) {
+    const created = await prisma.$transaction(
+      files.map((f) =>
+        prisma.attachment.create({
+          data: {
+            srId: id,
+            commentId: comment.id,
+            filename: f.originalname,
+            storedPath: f.filename,
+            mimeType: f.mimetype,
+            size: f.size,
+            uploadedById: req.user!.id,
+          },
+        })
+      )
+    );
+    comment.attachments = created;
+  }
 
   // This ticket originated by email — send the reply back to the plant
   // staff member's inbox too, threaded under the original conversation.
@@ -215,22 +249,48 @@ router.post("/:id/comments", requireAuth, async (req, res) => {
       );
 
       // Keep the original triggering email quoted below the new reply,
-      // like a normal mail client reply would.
+      // like a normal mail client reply would. Plain-text version keeps the
+      // "> "-prefixed quote (for clients/log views that only read text/
+      // plain); the HTML version (buildReplyHtml) renders the same content
+      // as a proper indented blockquote instead, since several clients
+      // (Outlook especially) show literal ">" characters rather than a
+      // visual quote when a plain-text-only mail is quote-prefixed.
       const quotedHeader = `On ${sr.createdAt.toUTCString()}, ${sr.requester.name} <${sr.requester.email}> wrote:`;
       const quotedBody = sr.body
         .split("\n")
         .map((line) => `> ${line}`)
         .join("\n");
       const text = `${parsed.data.body}\n\n${quotedHeader}\n${quotedBody}`;
+      const html = buildReplyHtml({
+        replyText: parsed.data.body,
+        quoted: { header: quotedHeader, body: sr.body },
+      });
+
+      const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+      let attachments: OutboundAttachment[] | undefined;
+      let sizeNote = "";
+      if (files.length > 0) {
+        if (totalBytes <= MAX_EMAIL_ATTACHMENT_BYTES) {
+          attachments = files.map((f) => ({
+            filename: f.originalname,
+            path: path.join(UPLOAD_DIR, f.filename),
+            contentType: f.mimetype,
+          }));
+        } else {
+          sizeNote = `\n\n(${files.length} attachment(s) too large to email — view them in RDC Hub.)`;
+        }
+      }
 
       const { messageId } = await sendReply({
         threadId: sr.gmailThreadId,
         to: sr.requester.email,
         cc,
         subject: `[${sr.ticketNumber}] Re: ${sr.subject}`,
-        text,
+        text: text + sizeNote,
+        html: sizeNote ? `${html}<p style="margin:16px 0 0;color:#6b7280;font-size:13px;">${sizeNote.trim()}</p>` : html,
         inReplyTo: sr.lastEmailMessageId,
         references: sr.lastEmailMessageId,
+        attachments,
       });
       await prisma.serviceRequest.update({ where: { id }, data: { lastEmailMessageId: messageId } });
     } catch (err) {

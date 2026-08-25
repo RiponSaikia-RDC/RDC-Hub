@@ -135,6 +135,15 @@ export async function markAsRead(id: string): Promise<void> {
   await gmail.users.messages.modify({ userId: "me", id, requestBody: { removeLabelIds: ["UNREAD"] } });
 }
 
+/** A file already sitting on disk (server/uploads/<storedPath>) to attach
+ * to an outbound message — reuses the same file the Hub UI serves for
+ * in-app download, no re-upload. */
+export interface OutboundAttachment {
+  filename: string;
+  path: string;
+  contentType?: string;
+}
+
 export interface SendReplyInput {
   /** Gmail thread id to reply within, so it threads in Gmail's own UI too. */
   threadId: string;
@@ -144,9 +153,19 @@ export interface SendReplyInput {
   cc?: string[];
   subject: string;
   text: string;
+  /** HTML alternative of `text` — see emailFormat.ts's buildReplyHtml.
+   * Optional so callers that only have plain text (e.g. system messages)
+   * still work; when present, sent as multipart/alternative so HTML-
+   * preferring clients (Outlook, Gmail) render it instead of raw text. */
+  html?: string;
   /** RFC822 Message-ID of the message being replied to, if any. */
   inReplyTo?: string | null;
   references?: string | null;
+  /** Files to attach, same ones stored for in-app download. Gmail's total
+   * message size cap is 25MB; callers should keep the sum well under that
+   * (see MAX_EMAIL_ATTACHMENT_BYTES in requests.ts) since an oversized send
+   * fails outright rather than partially attaching. */
+  attachments?: OutboundAttachment[];
 }
 
 export interface SendReplyResult {
@@ -169,9 +188,15 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
     cc: input.cc?.length ? input.cc.join(", ") : undefined,
     subject: input.subject,
     text: input.text,
+    html: input.html || undefined,
     messageId,
     inReplyTo: input.inReplyTo || undefined,
     references: input.references || undefined,
+    attachments: input.attachments?.map((a) => ({
+      filename: a.filename,
+      path: a.path,
+      contentType: a.contentType,
+    })),
   });
 
   const rawBuffer: Buffer = await mail.compile().build();

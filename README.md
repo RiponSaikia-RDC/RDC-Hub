@@ -241,3 +241,34 @@ page. Any Member can:
   who's already the "To"). The reply box on the request detail page also
   has an "Add more Cc recipients" field for looping in anyone new, per
   reply.
+- **Formatting**: outbound replies are sent as text + HTML
+  (`server/src/lib/emailFormat.ts`'s `buildReplyHtml`) so they render as
+  real paragraphs with a proper indented quote block in HTML-preferring
+  clients (Outlook, Gmail) instead of raw `> `-prefixed plain text.
+  Inbound mail is run through `cleanInboundText` before being stored: it
+  strips the quoted thread history a reply typically carries below it
+  ("On ... wrote:", "-----Original Message-----", a `>`-quoted block, …
+  — the Hub already keeps that history as separate comments) and rejoins
+  lines that a sender's mail client hard-wrapped mid-sentence (common
+  with classic Outlook, which wraps plain text at ~76 columns without
+  marking it `format=flowed`), which otherwise shows up as a ragged,
+  broken-looking paragraph.
+
+## Attachments
+
+Both directions support attachments of any type — Excel, PDF, images,
+Word docs, etc. — up to 15MB per file, 5 files per message:
+
+- **Inbound**: any files on an inbound email are saved and attached to
+  the ticket (or the comment, if it's a reply on an existing thread) the
+  same way a web upload is (`server/src/lib/emailPoller.ts`'s
+  `saveAttachments`).
+- **Outbound**: the reply box on the request detail page has an "Attach
+  files" picker. Files picked there are saved against the reply *and*,
+  for an email-originated ticket, sent as real email attachments on the
+  outbound reply (`server/src/routes/requests.ts`) — reusing the same
+  file already written to `server/uploads/`, no re-upload. If a reply's
+  attachments would push the message over Gmail's 25MB total size cap
+  (kept under a 20MB internal threshold), they're skipped from the
+  *email* but still saved and downloadable in the Hub, with a note added
+  to the email body pointing back to the Hub.

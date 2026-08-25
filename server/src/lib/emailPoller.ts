@@ -11,6 +11,7 @@ import { InboundAttachment } from "./gmail";
 import { matchQueryType } from "./emailRouter";
 import { pickAssignee } from "./assignmentPicker";
 import { nextTicketNumber } from "./ticketNumber";
+import { cleanInboundText } from "./emailFormat";
 
 const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
 
@@ -117,13 +118,16 @@ async function processMessage(id: string): Promise<void> {
   }
 
   const requester = await findOrCreateRequester(email.fromEmail, email.fromName);
+  // Strips quoted thread history and rejoins hard-wrapped lines — see
+  // emailFormat.ts for why raw mail text needs this before it's stored/shown.
+  const cleanedBody = cleanInboundText(email.text) || "(no message body)";
 
   if (sr) {
     const comment = await prisma.comment.create({
       data: {
         srId: sr.id,
         authorId: requester.id,
-        body: email.text || "(no message body)",
+        body: cleanedBody,
         source: "EMAIL",
         gmailMessageId: id,
       },
@@ -165,7 +169,7 @@ async function processMessage(id: string): Promise<void> {
           data: {
             ticketNumber,
             subject: email.subject,
-            body: email.text || "(no message body)",
+            body: cleanedBody,
             queryTypeId,
             plantId,
             requesterId: requester.id,

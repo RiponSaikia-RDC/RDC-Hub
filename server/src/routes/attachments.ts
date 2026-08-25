@@ -1,28 +1,11 @@
 import { Router } from "express";
 import path from "path";
 import fs from "fs";
-import crypto from "crypto";
-import multer from "multer";
 import { prisma } from "../lib/prisma";
 import { requireAuth } from "../middleware/requireAuth";
+import { UPLOAD_DIR, upload } from "../lib/uploads";
 
 const router = Router();
-
-const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const unique = crypto.randomBytes(16).toString("hex");
-    cb(null, `${unique}${path.extname(file.originalname)}`);
-  },
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB per file
-});
 
 async function canAccessSr(userId: number, role: string, srId: number) {
   const sr = await prisma.serviceRequest.findUnique({ where: { id: srId } });

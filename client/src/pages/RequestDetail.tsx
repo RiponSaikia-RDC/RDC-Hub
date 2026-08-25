@@ -15,6 +15,7 @@ export function RequestDetail() {
   const [error, setError] = useState<string | null>(null);
   const [commentBody, setCommentBody] = useState("");
   const [ccInput, setCcInput] = useState("");
+  const [commentFiles, setCommentFiles] = useState<File[]>([]);
   const [posting, setPosting] = useState(false);
   const [members, setMembers] = useState<User[]>([]);
   const [queryTypes, setQueryTypes] = useState<QueryType[]>([]);
@@ -68,15 +69,43 @@ export function RequestDetail() {
     if (!commentBody.trim() || !sr) return;
     setPosting(true);
     try {
-      await api.post(`/requests/${sr.id}/comments`, { body: commentBody, cc: ccInput || undefined });
+      // Plain JSON when there's nothing to attach; multipart/form-data (so
+      // the files ride along with the same request, and get emailed out
+      // together with the reply — see requests.ts's POST /:id/comments)
+      // as soon as at least one file is picked.
+      if (commentFiles.length > 0) {
+        const form = new FormData();
+        form.append("body", commentBody);
+        if (ccInput) form.append("cc", ccInput);
+        commentFiles.forEach((f) => form.append("files", f));
+        await api.post(`/requests/${sr.id}/comments`, form);
+      } else {
+        await api.post(`/requests/${sr.id}/comments`, { body: commentBody, cc: ccInput || undefined });
+      }
       setCommentBody("");
       setCcInput("");
+      setCommentFiles([]);
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not post the reply");
     } finally {
       setPosting(false);
     }
+  }
+
+  function addCommentFiles(fileList: FileList | null) {
+    if (!fileList) return;
+    setCommentFiles((prev) => [...prev, ...Array.from(fileList)].slice(0, 5));
+  }
+
+  function removeCommentFile(index: number) {
+    setCommentFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   async function handleStatusChange(status: RequestStatus) {
@@ -250,6 +279,19 @@ export function RequestDetail() {
                     <span>{new Date(c.createdAt).toLocaleString()}</span>
                   </div>
                   <p className="whitespace-pre-wrap text-sm text-slate-700">{c.body}</p>
+                  {c.attachments && c.attachments.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {c.attachments.map((a) => (
+                        <a
+                          key={a.id}
+                          href={`/api/attachments/${a.id}/download`}
+                          className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                        >
+                          📎 {a.filename}
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))
             ) : (
@@ -280,6 +322,47 @@ export function RequestDetail() {
               value={commentBody}
               onChange={(e) => setCommentBody(e.target.value)}
             />
+
+            {commentFiles.length > 0 && (
+              <ul className="space-y-1">
+                {commentFiles.map((f, i) => (
+                  <li
+                    key={`${f.name}-${i}`}
+                    className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600"
+                  >
+                    <span>
+                      📎 {f.name} <span className="text-slate-400">({formatFileSize(f.size)})</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeCommentFile(i)}
+                      className="ml-2 text-slate-400 hover:text-red-600"
+                      aria-label={`Remove ${f.name}`}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="flex items-center justify-between">
+              <label className="cursor-pointer text-xs font-medium text-brand-700 hover:text-brand-800">
+                📎 Attach files (Excel, PDF, images, …)
+                <input
+                  type="file"
+                  multiple
+                  className="hidden"
+                  disabled={commentFiles.length >= 5}
+                  onChange={(e) => {
+                    addCommentFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              {commentFiles.length >= 5 && <span className="text-xs text-slate-400">Max 5 files per reply</span>}
+            </div>
+
             <button
               type="submit"
               disabled={posting || !commentBody.trim()}
