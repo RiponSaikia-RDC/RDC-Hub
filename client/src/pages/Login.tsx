@@ -11,6 +11,7 @@ export function Login() {
   const [error, setError] = useState<string | null>(null);
   const [notActivated, setNotActivated] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [logoOk, setLogoOk] = useState(true);
 
   if (user) return <Navigate to="/" replace />;
 
@@ -37,6 +38,17 @@ export function Login() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
       <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+        {logoOk && (
+          <img
+            src="/rdc-truck.png"
+            alt="RDC Concrete India Ltd."
+            className="mx-auto mb-3 h-14 w-auto"
+            onError={() => setLogoOk(false)}
+          />
+        )}
+        <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wide text-slate-400">
+          RDC Concrete India Ltd.
+        </div>
         <h1 className="mb-1 text-center text-2xl font-bold text-brand-700">RDC Hub</h1>
         <p className="mb-6 text-center text-sm text-slate-500">Logistics Service Request Platform</p>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -83,6 +95,9 @@ export function Login() {
         </form>
         <p className="mt-4 text-center text-sm text-slate-500">
           New here? <Link to="/activate" className="text-brand-700 hover:underline">Activate your account</Link>
+        </p>
+        <p className="mt-2 text-center text-xs text-slate-400">
+          Plant staff: raise or follow up on a request by emailing your RDC Hub contact instead of logging in here.
         </p>
       </div>
     </div>

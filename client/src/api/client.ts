@@ -10,8 +10,14 @@ export class ApiError extends Error {
   }
 }
 
+// import.meta.env.BASE_URL is Vite's own reflection of the `base` config
+// value (see vite.config.ts) - "/" by default (standalone dev/prod), or
+// "/hub/" when built for the unified RDC Dashboard. Deriving the API
+// prefix from it keeps this file working unmodified in both setups.
+const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${API_BASE}/api${path}`, {
     credentials: "include",
     headers:
       options.body && !(options.body instanceof FormData)

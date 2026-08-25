@@ -12,6 +12,12 @@ export interface QueryType {
   name: string;
   description?: string | null;
   active: boolean;
+  // Comma-separated keywords matched against inbound email subject/body
+  // to auto-route it to this query type.
+  keywords?: string | null;
+  // At most one QueryType has this true — the fallback for inbound email
+  // that matches no keywords.
+  isEmailDefault?: boolean;
 }
 
 export interface User {
@@ -41,6 +47,9 @@ export interface Comment {
   createdAt: string;
   author: { id: number; name: string; role: Role };
   attachments: Attachment[];
+  // "WEB" (posted in the Hub) or "EMAIL" (an inbound reply from the plant
+  // staff member's mailbox).
+  source: "WEB" | "EMAIL";
 }
 
 export interface ServiceRequest {
@@ -58,6 +67,16 @@ export interface ServiceRequest {
   assignedTo: { id: number; name: string; email?: string } | null;
   attachments?: Attachment[];
   comments?: Comment[];
+  // "WEB" (created via the New Request form, historical) or "EMAIL"
+  // (created by the email poller from an inbound message).
+  source: "WEB" | "EMAIL";
+  // False when an inbound email matched no QueryType keyword — it's
+  // unassigned and broadcast to every member instead of auto-picked, and
+  // the "teach routing" panel shows on the detail page.
+  keywordMatched: boolean;
+  // Raw comma-separated addresses from the original email's To/Cc, if any.
+  originalToRaw?: string | null;
+  originalCcRaw?: string | null;
 }
 
 export interface FaqEntry {

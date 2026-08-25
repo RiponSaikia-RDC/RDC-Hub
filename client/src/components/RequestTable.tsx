@@ -29,6 +29,9 @@ export function RequestTable({ requests, showRequester = false }: { requests: Se
                 <Link to={`/requests/${r.id}`} className="font-medium text-brand-700 hover:underline">
                   {r.ticketNumber}
                 </Link>
+                {r.source === "EMAIL" && (
+                  <span title="Raised by email" className="ml-1.5 align-middle">📧</span>
+                )}
               </td>
               <td className="max-w-xs truncate px-4 py-3">{r.subject}</td>
               <td className="whitespace-nowrap px-4 py-3 text-slate-600">{r.queryType.name}</td>

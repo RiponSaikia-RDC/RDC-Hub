@@ -4,8 +4,6 @@ import { Layout } from "./components/Layout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { Login } from "./pages/Login";
 import { Activate } from "./pages/Activate";
-import { NewRequest } from "./pages/NewRequest";
-import { MyRequests } from "./pages/MyRequests";
 import { Queue } from "./pages/Queue";
 import { RequestDetail } from "./pages/RequestDetail";
 import { Faq } from "./pages/Faq";
@@ -19,7 +17,8 @@ import { Plants } from "./pages/admin/Plants";
 function Home() {
   const { user } = useAuth();
   if (!user) return null;
-  if (user.role === "PLANT_STAFF") return <Navigate to="/new-request" replace />;
+  // Plant Staff no longer get Hub logins (email is their channel — see
+  // auth.ts's /login handler), so this branch is unreachable in practice.
   if (user.role === "MEMBER") return <Navigate to="/queue" replace />;
   return <Navigate to="/admin" replace />;
 }
@@ -35,11 +34,6 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/requests/:id" element={<RequestDetail />} />
           <Route path="/faq" element={<Faq />} />
-
-          <Route element={<ProtectedRoute roles={["PLANT_STAFF"]} />}>
-            <Route path="/new-request" element={<NewRequest />} />
-            <Route path="/my-requests" element={<MyRequests />} />
-          </Route>
 
           <Route element={<ProtectedRoute roles={["MEMBER"]} />}>
             <Route path="/queue" element={<Queue />} />

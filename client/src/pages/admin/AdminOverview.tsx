@@ -11,12 +11,21 @@ const TILES: { status: RequestStatus | "UNASSIGNED"; label: string; color: strin
   { status: "UNASSIGNED", label: "Unassigned", color: "bg-red-50 text-red-800" },
 ];
 
+interface EmailStatus {
+  configured: boolean;
+  lastPollAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+}
+
 export function AdminOverview() {
   const [requests, setRequests] = useState<ServiceRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [emailStatus, setEmailStatus] = useState<EmailStatus | null>(null);
 
   useEffect(() => {
     api.get<ServiceRequest[]>("/requests").then(setRequests).finally(() => setLoading(false));
+    api.get<EmailStatus>("/admin/email-status").then(setEmailStatus).catch(() => {});
   }, []);
 
   const counts = {
@@ -50,6 +59,33 @@ export function AdminOverview() {
         Manage members, query types, and routing rights from the tabs above. New service requests route automatically
         to the least-loaded member with rights to the chosen query type.
       </p>
+
+      {emailStatus && (
+        <div className="mt-6 max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold text-slate-800">Email Intake</h2>
+          {!emailStatus.configured ? (
+            <p className="text-sm text-slate-500">
+              Not configured yet — set the <code className="rounded bg-slate-100 px-1">GMAIL_*</code> variables in
+              the server's <code className="rounded bg-slate-100 px-1">.env</code> (see README) to let plant staff
+              raise requests by email.
+            </p>
+          ) : (
+            <div className="space-y-1 text-sm">
+              <p className="text-emerald-700">Configured and polling.</p>
+              <p className="text-slate-500">
+                Last checked: {emailStatus.lastPollAt ? new Date(emailStatus.lastPollAt).toLocaleString() : "never yet"}
+              </p>
+              {emailStatus.lastError ? (
+                <p className="text-red-600">Last error: {emailStatus.lastError}</p>
+              ) : (
+                <p className="text-slate-500">
+                  Last success: {emailStatus.lastSuccessAt ? new Date(emailStatus.lastSuccessAt).toLocaleString() : "—"}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

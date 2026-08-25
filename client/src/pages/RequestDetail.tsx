@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { StatusBadge } from "../components/StatusBadge";
-import { RequestStatus, ServiceRequest, User } from "../types";
+import { QueryType, RequestStatus, ServiceRequest, User } from "../types";
 
 const STATUS_FLOW: RequestStatus[] = ["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"];
 
@@ -14,15 +14,26 @@ export function RequestDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [commentBody, setCommentBody] = useState("");
+  const [ccInput, setCcInput] = useState("");
   const [posting, setPosting] = useState(false);
   const [members, setMembers] = useState<User[]>([]);
+  const [queryTypes, setQueryTypes] = useState<QueryType[]>([]);
   const [faqMessage, setFaqMessage] = useState<string | null>(null);
+
+  // "Teach routing" panel state (shown for source=EMAIL tickets that
+  // matched no keyword — see requests.ts's keywordMatched).
+  const [teachKeywords, setTeachKeywords] = useState("");
+  const [teachQueryTypeId, setTeachQueryTypeId] = useState("");
+  const [teachAssigneeId, setTeachAssigneeId] = useState("");
+  const [teaching, setTeaching] = useState(false);
+  const [teachMessage, setTeachMessage] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
     try {
       const data = await api.get<ServiceRequest>(`/requests/${id}`);
       setSr(data);
+      setTeachQueryTypeId(String(data.queryType.id));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load this request");
     } finally {
@@ -36,22 +47,30 @@ export function RequestDetail() {
   }, [id]);
 
   useEffect(() => {
-    if (user?.role === "ADMIN") {
+    // GET /users returns the full list for Admin, a lightweight
+    // id/name-only member list for everyone else — safe for any logged-in
+    // user to call (needed here for reassign/claim/teach dropdowns).
+    if (user?.role === "ADMIN" || user?.role === "MEMBER") {
       api.get<User[]>("/users").then((u) => setMembers(u.filter((m) => m.role === "MEMBER"))).catch(() => {});
+      api.get<QueryType[]>("/query-types").then(setQueryTypes).catch(() => {});
     }
   }, [user]);
 
-  const canUpdate = sr && user && (user.role === "ADMIN" || sr.assignedTo?.id === user.id);
-  const canReassign = user?.role === "ADMIN";
+  const isUnclaimed = !!sr && !sr.assignedTo;
+  const canUpdate = sr && user && (user.role === "ADMIN" || sr.assignedTo?.id === user.id || (user.role === "MEMBER" && isUnclaimed));
+  const canClaim = user?.role === "MEMBER" && isUnclaimed;
+  const canReassign = user?.role === "ADMIN" || canClaim;
   const canPromoteToFaq = sr && user && (user.role === "ADMIN" || sr.assignedTo?.id === user.id);
+  const showTeachPanel = sr && sr.source === "EMAIL" && !sr.keywordMatched && (user?.role === "ADMIN" || user?.role === "MEMBER");
 
   async function handleComment(e: FormEvent) {
     e.preventDefault();
     if (!commentBody.trim() || !sr) return;
     setPosting(true);
     try {
-      await api.post(`/requests/${sr.id}/comments`, { body: commentBody });
+      await api.post(`/requests/${sr.id}/comments`, { body: commentBody, cc: ccInput || undefined });
       setCommentBody("");
+      setCcInput("");
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not post the reply");
@@ -96,6 +115,30 @@ export function RequestDetail() {
     }
   }
 
+  async function handleTeach(e: FormEvent) {
+    e.preventDefault();
+    if (!sr || !teachKeywords.trim() || !teachQueryTypeId) return;
+    setTeaching(true);
+    setTeachMessage(null);
+    try {
+      await api.post(`/query-types/${teachQueryTypeId}/learn`, {
+        keywords: teachKeywords,
+        assigneeId: teachAssigneeId ? Number(teachAssigneeId) : undefined,
+      });
+      await api.patch(`/requests/${sr.id}`, {
+        queryTypeId: Number(teachQueryTypeId),
+        assignedToId: teachAssigneeId ? Number(teachAssigneeId) : undefined,
+      });
+      setTeachMessage("Saved — future emails matching these keywords will route automatically.");
+      setTeachKeywords("");
+      await load();
+    } catch (err) {
+      setTeachMessage(err instanceof ApiError ? err.message : "Could not save this routing rule");
+    } finally {
+      setTeaching(false);
+    }
+  }
+
   if (loading) return <p className="text-sm text-slate-500">Loading…</p>;
   if (error && !sr) return <p className="text-sm text-red-600">{error}</p>;
   if (!sr) return null;
@@ -105,8 +148,20 @@ export function RequestDetail() {
       <div className="space-y-4 lg:col-span-2">
         <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">{sr.ticketNumber}</span>
-            <StatusBadge status={sr.status} />
+            <span className="text-xs font-medium text-slate-500">
+              {sr.ticketNumber}
+              {sr.source === "EMAIL" && (
+                <span title="Raised by email" className="ml-1.5">📧</span>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              {isUnclaimed && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                  Unclaimed — visible to all members
+                </span>
+              )}
+              <StatusBadge status={sr.status} />
+            </div>
           </div>
           <h1 className="text-lg font-semibold text-slate-900">{sr.subject}</h1>
           <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{sr.body}</p>
@@ -133,6 +188,54 @@ export function RequestDetail() {
           </div>
         </div>
 
+        {showTeachPanel && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 shadow-sm">
+            <h2 className="mb-1 text-sm font-semibold text-amber-900">Teach Routing</h2>
+            <p className="mb-3 text-xs text-amber-800">
+              This email matched no keyword, so it wasn't auto-assigned — every member can see it until someone
+              claims it. Add a keyword and a responsible person below so similar emails route automatically next time.
+            </p>
+            <form onSubmit={handleTeach} className="space-y-2">
+              <input
+                className="w-full rounded-md border border-amber-300 bg-white px-3 py-2 text-sm"
+                placeholder="Keyword(s), comma-separated — e.g. invoice, billing"
+                value={teachKeywords}
+                onChange={(e) => setTeachKeywords(e.target.value)}
+                required
+              />
+              <div className="grid gap-2 sm:grid-cols-2">
+                <select
+                  className="w-full rounded-md border border-amber-300 bg-white px-3 py-2 text-sm"
+                  value={teachQueryTypeId}
+                  onChange={(e) => setTeachQueryTypeId(e.target.value)}
+                >
+                  {queryTypes.map((qt) => (
+                    <option key={qt.id} value={qt.id}>{qt.name}</option>
+                  ))}
+                </select>
+                <select
+                  className="w-full rounded-md border border-amber-300 bg-white px-3 py-2 text-sm"
+                  value={teachAssigneeId}
+                  onChange={(e) => setTeachAssigneeId(e.target.value)}
+                >
+                  <option value="">No specific person (keyword only)</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>Route to {m.name}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="submit"
+                disabled={teaching || !teachKeywords.trim()}
+                className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-60"
+              >
+                {teaching ? "Saving…" : "Save routing rule"}
+              </button>
+              {teachMessage && <p className="text-xs text-amber-900">{teachMessage}</p>}
+            </form>
+          </div>
+        )}
+
         <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="mb-3 text-sm font-semibold text-slate-800">Conversation</h2>
           <div className="space-y-3">
@@ -140,7 +243,10 @@ export function RequestDetail() {
               sr.comments.map((c) => (
                 <div key={c.id} className="rounded-lg bg-slate-50 p-3">
                   <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
-                    <span className="font-medium text-slate-700">{c.author.name}</span>
+                    <span className="font-medium text-slate-700">
+                      {c.author.name}
+                      {c.source === "EMAIL" && <span className="ml-1 font-normal text-slate-400">(via email)</span>}
+                    </span>
                     <span>{new Date(c.createdAt).toLocaleString()}</span>
                   </div>
                   <p className="whitespace-pre-wrap text-sm text-slate-700">{c.body}</p>
@@ -152,6 +258,21 @@ export function RequestDetail() {
           </div>
 
           <form onSubmit={handleComment} className="mt-4 space-y-2">
+            {sr.source === "EMAIL" && (
+              <div className="space-y-1.5">
+                <p className="text-xs text-slate-500">
+                  This request came in by email — your reply will also be emailed to {sr.requester.email ?? "the sender"}
+                  {(sr.originalToRaw || sr.originalCcRaw) && " and everyone who was on the original email"}, with the
+                  original message quoted below it.
+                </p>
+                <input
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs"
+                  placeholder="Add more Cc recipients (comma-separated, optional)"
+                  value={ccInput}
+                  onChange={(e) => setCcInput(e.target.value)}
+                />
+              </div>
+            )}
             <textarea
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
               rows={3}
@@ -193,7 +314,15 @@ export function RequestDetail() {
 
         {canReassign && (
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-2 text-sm font-semibold text-slate-800">Reassign</h2>
+            <h2 className="mb-2 text-sm font-semibold text-slate-800">{canClaim ? "Claim / Assign" : "Reassign"}</h2>
+            {canClaim && user && (
+              <button
+                onClick={() => handleReassign(user.id)}
+                className="mb-2 w-full rounded-md border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100"
+              >
+                Claim for myself
+              </button>
+            )}
             <select
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
               value={sr.assignedTo?.id ?? ""}

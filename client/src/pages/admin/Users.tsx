@@ -31,7 +31,14 @@ export function Users() {
     e.preventDefault();
     setError(null);
     try {
-      await api.post("/users", { name, email, username, password, role, plantId: plantId || null });
+      await api.post("/users", {
+        name,
+        email,
+        username,
+        password: role === "PLANT_STAFF" ? undefined : password,
+        role,
+        plantId: plantId || null,
+      });
       setName("");
       setEmail("");
       setUsername("");
@@ -58,6 +65,11 @@ export function Users() {
   return (
     <div>
       <h1 className="mb-4 text-xl font-semibold text-slate-900">Users</h1>
+      <p className="mb-4 text-sm text-slate-500">
+        Plant Staff no longer log in to the Hub — they raise and follow up on requests entirely by email.
+        Plant Staff records here are just a directory (name/email/plant) used to route their emails correctly
+        from first contact; new ones are also created automatically the first time someone emails in.
+      </p>
 
       {otpBanner && (
         <div className="mb-4 flex items-center justify-between rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm">
@@ -83,7 +95,7 @@ export function Users() {
       <div className="mb-6">
         <CsvUploader
           title="Bulk Upload Users"
-          description='CSV columns: "name", "email", "username", "role" (ADMIN/MEMBER/PLANT_STAFF), "plantcode" (optional). New users get no password — each gets a one-time OTP shown below to activate their own account.'
+          description='CSV columns: "name", "email", "username", "role" (ADMIN/MEMBER/PLANT_STAFF), "plantcode" (optional). New Admin/Member users get no password — each gets a one-time OTP shown below to activate their own account. Plant Staff rows are directory-only (no login, no OTP).'
           templateFilename="rdc-hub-users-template.csv"
           templateHeaders={["name", "email", "username", "role", "plantcode"]}
           templateSampleRow={["Jane Doe", "jane.doe@rdc.in", "jdoe", "PLANT_STAFF", "PLT1"]}
@@ -158,7 +170,7 @@ export function Users() {
                       >
                         {u.active ? "Active" : "Disabled"}
                       </button>
-                      {!u.activated && (
+                      {u.role !== "PLANT_STAFF" && !u.activated && (
                         <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                           Pending activation
                         </span>
@@ -166,9 +178,13 @@ export function Users() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button onClick={() => regenerateOtp(u)} className="text-xs text-brand-700 hover:underline">
-                      {u.activated ? "Reset via OTP" : "Resend OTP"}
-                    </button>
+                    {u.role === "PLANT_STAFF" ? (
+                      <span className="text-xs text-slate-400">Directory only</span>
+                    ) : (
+                      <button onClick={() => regenerateOtp(u)} className="text-xs text-brand-700 hover:underline">
+                        {u.activated ? "Reset via OTP" : "Resend OTP"}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -181,12 +197,17 @@ export function Users() {
           <input className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} required />
           <input className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           <input className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} required />
-          <input className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Temporary password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
+          {role !== "PLANT_STAFF" && (
+            <input className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Temporary password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
+          )}
           <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={role} onChange={(e) => setRole(e.target.value as Role)}>
             {ROLES.map((r) => (
               <option key={r} value={r}>{r.replace("_", " ")}</option>
             ))}
           </select>
+          {role === "PLANT_STAFF" && (
+            <p className="text-xs text-slate-500">Plant Staff don't log in — this just registers them as a directory entry for email routing.</p>
+          )}
           <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={plantId} onChange={(e) => setPlantId(e.target.value ? Number(e.target.value) : "")}>
             <option value="">No home plant</option>
             {plants.map((p) => (

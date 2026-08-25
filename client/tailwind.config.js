@@ -4,6 +4,9 @@ export default {
   darkMode: "media",
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['"Inter"', "ui-sans-serif", "system-ui", "-apple-system", '"Segoe UI"', "Roboto", "sans-serif"],
+      },
       colors: {
         brand: {
           50: "#eef4ff",
