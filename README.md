@@ -115,6 +115,37 @@ below). Everyone who does log in sees a role-specific dashboard:
    — it needs its own one-time Google Cloud OAuth setup independent of the
    rest of deployment.
 
+## Hosting as a standalone public site
+
+RDC Hub is self-contained — it does not depend on RDC Nexus. To deploy it
+on its own domain:
+
+1. **Build standalone** (base path `/`, not `/hub/`):
+   ```bash
+   npm ci
+   npm run build          # client (base "/") + server
+   ```
+   Do **not** set `VITE_BASE` — that flag is only for the RDC Nexus mount.
+   The compiled output is `client/dist/` (static) and `server/dist/`; the
+   server serves the client itself, so `npm start` is the only process.
+2. **Env** (`server/.env`): `NODE_ENV=production` (makes the auth cookie
+   `Secure`), a strong random `JWT_SECRET`, `PORT`, `DATABASE_URL`, and the
+   `GMAIL_*` values. `CLIENT_ORIGIN` is not needed in production (same
+   origin). Never commit `.env` — it's gitignored; keep a copy in the
+   host's secret store.
+3. **HTTPS**: terminate TLS at a reverse proxy (nginx / Caddy / IIS / a
+   cloud load balancer) in front of `npm start`. The app assumes it's
+   reached over HTTPS in production (cookie flags).
+4. **Database**: SQLite is fine for a single instance; for anything
+   bigger switch `provider` + `DATABASE_URL` (step 1 of the previous
+   section) and run `npx prisma migrate deploy`.
+5. **Uploads**: `server/uploads/` on local disk — put it on a persistent
+   volume, or shared storage if you run more than one instance.
+6. **Migrate the folder directly**: copying the whole `RDC Hub/` folder to
+   a host works as-is (it's a standard npm workspace). `node_modules/`,
+   `dist/`, and `server/prisma/dev.db` are gitignored, so after copying a
+   *clone* run `npm ci && npm run build && npx prisma migrate deploy -w server`.
+
 ## Email intake (Gmail)
 
 Plant staff raise and follow up on requests entirely by emailing one
