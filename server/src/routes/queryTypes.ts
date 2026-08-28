@@ -105,14 +105,31 @@ router.post("/:id/learn", requireAuth, async (req, res) => {
 
 router.delete("/:id", requireAuth, requireRole("ADMIN"), async (req, res) => {
   const id = Number(req.params.id);
-  try {
-    // Soft-delete by deactivating instead of hard delete, since existing
-    // SRs / FAQ entries likely reference this query type.
-    const qt = await prisma.queryType.update({ where: { id }, data: { active: false } });
-    res.json(qt);
-  } catch {
-    res.status(404).json({ error: "Query type not found" });
+  const qt = await prisma.queryType.findUnique({ where: { id } });
+  if (!qt) return res.status(404).json({ error: "Query type not found" });
+
+  if (qt.isEmailDefault) {
+    return res.status(409).json({
+      error: "This is the email-default query type. Set another one as the default first.",
+    });
   }
+
+  const [requestCount, faqCount] = await Promise.all([
+    prisma.serviceRequest.count({ where: { queryTypeId: id } }),
+    prisma.faqEntry.count({ where: { queryTypeId: id } }),
+  ]);
+  if (requestCount > 0 || faqCount > 0) {
+    return res.status(409).json({
+      error:
+        `In use by ${requestCount} request(s)` +
+        (faqCount > 0 ? ` and ${faqCount} FAQ entry(ies)` : "") +
+        `. Deactivate it instead of deleting.`,
+    });
+  }
+
+  // QueryTypeAssignment rows for this query type cascade on delete.
+  await prisma.queryType.delete({ where: { id } });
+  res.json({ ok: true });
 });
 
 export default router;

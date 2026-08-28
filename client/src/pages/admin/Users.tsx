@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Fragment, useEffect, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import { CsvUploader } from "../../components/CsvUploader";
 import { BulkUploadResponse, Plant, Role, User } from "../../types";
@@ -10,6 +10,16 @@ export function Users() {
   const [plants, setPlants] = useState<Plant[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [otpBanner, setOtpBanner] = useState<{ username: string; otp: string } | null>(null);
+
+  // Inline "set a password for this user" editor. Stored passwords are
+  // bcrypt hashes and can't be read back, so instead of a (impossible)
+  // "view password", an admin can set any Admin/Member account's password
+  // to something they choose and note down — no lock-out worries.
+  const [pwUserId, setPwUserId] = useState<number | null>(null);
+  const [pwValue, setPwValue] = useState("");
+  const [pwShow, setPwShow] = useState(true);
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwOkFor, setPwOkFor] = useState<number | null>(null);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -62,6 +72,45 @@ export function Users() {
     load();
   }
 
+  function openPw(u: User) {
+    setPwUserId(u.id);
+    setPwValue("");
+    setPwShow(true);
+    setPwOkFor(null);
+    setError(null);
+  }
+
+  async function savePw(u: User) {
+    if (pwValue.trim().length < 6) {
+      setError("Password must be at least 6 characters.");
+      return;
+    }
+    setPwBusy(true);
+    setError(null);
+    try {
+      await api.patch(`/users/${u.id}`, { password: pwValue });
+      setPwUserId(null);
+      setPwValue("");
+      setPwOkFor(u.id);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not set the password");
+    } finally {
+      setPwBusy(false);
+    }
+  }
+
+  async function handleDelete(u: User) {
+    if (!confirm(`Delete ${u.name} (${u.username})? This can't be undone.`)) return;
+    setError(null);
+    try {
+      await api.del(`/users/${u.id}`);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not delete this user");
+    }
+  }
+
   return (
     <div>
       <h1 className="mb-4 text-xl font-semibold text-slate-900">Users</h1>
@@ -70,6 +119,10 @@ export function Users() {
         Plant Staff records here are just a directory (name/email/plant) used to route their emails correctly
         from first contact; new ones are also created automatically the first time someone emails in.
       </p>
+
+      {error && (
+        <p className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+      )}
 
       {otpBanner && (
         <div className="mb-4 flex items-center justify-between rounded-lg border border-brand-200 bg-brand-50 px-4 py-3 text-sm">
@@ -133,7 +186,8 @@ export function Users() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {users.map((u) => (
-                <tr key={u.id}>
+                <Fragment key={u.id}>
+                <tr>
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-800">{u.name}</div>
                     <div className="text-xs text-slate-500">{u.email}</div>
@@ -178,15 +232,64 @@ export function Users() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {u.role === "PLANT_STAFF" ? (
-                      <span className="text-xs text-slate-400">Directory only</span>
-                    ) : (
-                      <button onClick={() => regenerateOtp(u)} className="text-xs text-brand-700 hover:underline">
-                        {u.activated ? "Reset via OTP" : "Resend OTP"}
+                    <div className="flex flex-col items-end gap-1">
+                      {u.role === "PLANT_STAFF" ? (
+                        <span className="text-xs text-slate-400">Directory only</span>
+                      ) : (
+                        <>
+                          <button onClick={() => regenerateOtp(u)} className="text-xs text-brand-700 hover:underline">
+                            {u.activated ? "Reset via OTP" : "Resend OTP"}
+                          </button>
+                          <button onClick={() => openPw(u)} className="text-xs text-brand-700 hover:underline">
+                            Set password
+                          </button>
+                          {pwOkFor === u.id && (
+                            <span className="text-[11px] font-medium text-emerald-600">Password updated ✓</span>
+                          )}
+                        </>
+                      )}
+                      <button onClick={() => handleDelete(u)} className="text-xs text-red-600 hover:underline">
+                        Delete
                       </button>
-                    )}
+                    </div>
                   </td>
                 </tr>
+                {pwUserId === u.id && (
+                  <tr className="bg-slate-50">
+                    <td colSpan={6} className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-medium text-slate-600">New password for {u.username}:</span>
+                        <input
+                          type={pwShow ? "text" : "password"}
+                          autoFocus
+                          value={pwValue}
+                          onChange={(e) => setPwValue(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && savePw(u)}
+                          placeholder="at least 6 characters"
+                          className="w-56 rounded-md border border-slate-300 px-2 py-1 font-mono text-sm"
+                        />
+                        <button type="button" onClick={() => setPwShow((s) => !s)} className="text-xs text-brand-700 hover:underline">
+                          {pwShow ? "Hide" : "Show"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={pwBusy}
+                          onClick={() => savePw(u)}
+                          className="rounded-md bg-brand-600 px-3 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+                        >
+                          {pwBusy ? "Saving…" : "Save"}
+                        </button>
+                        <button type="button" onClick={() => setPwUserId(null)} className="text-xs text-slate-500 hover:underline">
+                          Cancel
+                        </button>
+                        <span className="text-[11px] text-slate-400">
+                          Applies immediately and activates the account. Note it somewhere safe — it can't be viewed later.
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

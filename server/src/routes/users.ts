@@ -243,4 +243,36 @@ router.patch("/:id", requireAuth, requireRole("ADMIN"), async (req, res) => {
   }
 });
 
+// Hard delete — only for users with no activity on record (e.g. a mistyped
+// entry or a seeded placeholder). Anyone who has raised, been assigned, or
+// commented on a request must be disabled instead, so their history stays
+// intact. QueryTypeAssignment rows cascade on delete.
+router.delete("/:id", requireAuth, requireRole("ADMIN"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (id === req.user!.id) {
+    return res.status(400).json({ error: "You can't delete your own account" });
+  }
+
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  const [submitted, assigned, comments, attachments, faqEntries] = await Promise.all([
+    prisma.serviceRequest.count({ where: { requesterId: id } }),
+    prisma.serviceRequest.count({ where: { assignedToId: id } }),
+    prisma.comment.count({ where: { authorId: id } }),
+    prisma.attachment.count({ where: { uploadedById: id } }),
+    prisma.faqEntry.count({ where: { createdById: id } }),
+  ]);
+  if (submitted + assigned + comments + attachments + faqEntries > 0) {
+    return res.status(409).json({
+      error:
+        `This user has activity on ${submitted + assigned} request(s) and ${comments} reply(ies). ` +
+        `Disable the account instead of deleting it.`,
+    });
+  }
+
+  await prisma.user.delete({ where: { id } });
+  res.json({ ok: true });
+});
+
 export default router;
