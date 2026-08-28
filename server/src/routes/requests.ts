@@ -5,8 +5,10 @@ import { prisma } from "../lib/prisma";
 import { requireAuth } from "../middleware/requireAuth";
 import { nextTicketNumber } from "../lib/ticketNumber";
 import { pickAssignee } from "../lib/assignmentPicker";
+import { convert as htmlToText } from "html-to-text";
 import { sendReply, OutboundAttachment } from "../lib/gmail";
-import { buildReplyHtml } from "../lib/emailFormat";
+import { sanitizeOutboundHtml } from "../lib/emailHtml";
+import { buildReplyEmail, TrailMessage } from "../lib/replyEmail";
 import { UPLOAD_DIR, upload } from "../lib/uploads";
 
 const router = Router();
@@ -176,11 +178,18 @@ router.patch("/:id", requireAuth, async (req, res) => {
 });
 
 const commentSchema = z.object({
+  // Plain-text body — always sent (the editor's text content, or the raw
+  // textarea value). Kept as the searchable/preview body.
   body: z.string().min(1),
+  // Rich-text body from the Hub reply editor, if the member used formatting.
+  // Sanitised server-side before it's stored or emailed.
+  bodyHtml: z.string().optional(),
   // Extra recipients to Cc on this reply, on top of whoever was on the
   // original email's To/Cc — comma/semicolon/whitespace separated.
   cc: z.string().optional(),
 });
+
+const TRAIL_MAX = 20; // cap how many prior messages get quoted into a reply
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -196,7 +205,13 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
   const id = Number(req.params.id);
   const sr = await prisma.serviceRequest.findUnique({
     where: { id },
-    include: { requester: { select: { name: true, email: true } } },
+    include: {
+      requester: { select: { name: true, email: true } },
+      comments: {
+        orderBy: { createdAt: "asc" },
+        include: { author: { select: { name: true } } },
+      },
+    },
   });
   if (!sr) return res.status(404).json({ error: "Request not found" });
   if (!canView(req.user!, sr)) return res.status(403).json({ error: "You don't have access to this request" });
@@ -204,8 +219,16 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
   const parsed = commentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Comment body is required" });
 
+  const replyHtml = sanitizeOutboundHtml(parsed.data.bodyHtml);
+  // When the member used the rich editor, derive the plain-text body from
+  // the (sanitised) HTML here — html-to-text keeps paragraph breaks that a
+  // browser-side textContent grab would flatten. Fall back to whatever plain
+  // text the client sent for the no-formatting case.
+  const plainFromHtml = replyHtml ? htmlToText(replyHtml, { wordwrap: false }).trim() : "";
+  const body = plainFromHtml || parsed.data.body.trim() || "(no message body)";
+
   const comment = await prisma.comment.create({
-    data: { srId: id, authorId: req.user!.id, body: parsed.data.body },
+    data: { srId: id, authorId: req.user!.id, body, bodyHtml: replyHtml || null },
     include: { author: { select: { id: true, name: true, role: true } }, attachments: true },
   });
 
@@ -233,36 +256,25 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
     comment.attachments = created;
   }
 
-  // This ticket originated by email — send the reply back to the plant
-  // staff member's inbox too, threaded under the original conversation.
+  // This ticket originated by email — send the reply to the plant staff
+  // member's inbox as a STANDALONE message (not threaded), so the
+  // "[SR-n] Re: …" subject shows in Gmail's conversation list; the whole
+  // prior conversation is quoted below the reply instead (see replyEmail.ts).
   // A send failure never blocks the in-app reply, but it IS reported back
-  // in the response (emailDelivery, below) so the UI can warn instead of
-  // silently implying the plant staff member got it.
+  // in the response (emailDelivery, below) so the UI can warn.
   let emailDelivery: { status: "sent" | "failed"; error?: string } | null = null;
-  if (sr.source === "EMAIL" && sr.gmailThreadId) {
+  if (sr.source === "EMAIL" && sr.requester.email) {
     try {
       const hubEmail = (process.env.GMAIL_HUB_EMAIL || "").toLowerCase();
-      // Carry forward everyone who was on the original email's To/Cc
-      // (minus the hub address itself and the primary requester, who's
-      // already the "To" here), plus whatever the replying member added.
+      // Cc list: the shared hub mailbox always (so it keeps a copy of every
+      // outbound reply — replies now go out from an individual's account,
+      // not the hub address, and aren't threaded), plus everyone who was on
+      // the original email's To/Cc, plus whatever the replying member added.
+      // Minus the primary requester, who's already the "To".
       const autoCc = [...parseEmailList(sr.originalToRaw), ...parseEmailList(sr.originalCcRaw)];
       const manualCc = parseEmailList(parsed.data.cc);
-      const cc = Array.from(new Set([...autoCc, ...manualCc])).filter(
-        (e) => e !== hubEmail && e !== sr.requester.email.toLowerCase()
-      );
-
-      // Keep the original triggering email quoted below the new reply,
-      // like a normal mail client reply would. Plain-text version keeps the
-      // "> "-prefixed quote (for clients/log views that only read text/
-      // plain); the HTML version (buildReplyHtml) renders the same content
-      // as a proper indented blockquote instead, since several clients
-      // (Outlook especially) show literal ">" characters rather than a
-      // visual quote when a plain-text-only mail is quote-prefixed.
-      const quotedHeader = `On ${sr.createdAt.toUTCString()}, ${sr.requester.name} <${sr.requester.email}> wrote:`;
-      const quotedBody = sr.body
-        .split("\n")
-        .map((line) => `> ${line}`)
-        .join("\n");
+      const cc = Array.from(new Set([hubEmail, ...autoCc, ...manualCc]))
+        .filter((e) => e && e !== sr.requester.email!.toLowerCase());
 
       // Attachments: attach files that fit under Gmail's size cap; the rest
       // still stay saved and downloadable in the Hub, with a note in the
@@ -282,28 +294,40 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
         }
       }
 
-      // A visible ticket reference in the body — Gmail's conversation view
-      // shows only the thread's original subject, hiding the "[SR-n] Re: …"
-      // we set on the reply's Subject header, so plant staff (and anyone
-      // Cc'd) otherwise have no ticket number to quote back.
       const refLine = `Ref: ${sr.ticketNumber} — please keep this reference on any reply. Sent via RDC Hub.`;
-      const replyBody = sizeNote ? `${parsed.data.body}\n\n${sizeNote}` : parsed.data.body;
-      const text = `${replyBody}\n\n${refLine}\n\n${quotedHeader}\n${quotedBody}`;
-      const html = buildReplyHtml({
-        replyText: replyBody,
-        footer: refLine,
-        quoted: { header: quotedHeader, body: sr.body },
+
+      // Build the quoted trail newest-first: the most recent prior comment
+      // down to the oldest, then the original request last. The comment we
+      // just created is excluded; capped at TRAIL_MAX.
+      const priorComments = sr.comments.filter((c) => c.id !== comment.id);
+      const trail: TrailMessage[] = [
+        ...priorComments
+          .slice()
+          .reverse()
+          .map((c) => ({ author: c.author.name, date: c.createdAt, text: c.body, html: c.bodyHtml })),
+        {
+          author: sr.requester.name,
+          email: sr.requester.email,
+          date: sr.createdAt,
+          text: sr.body,
+          html: sr.bodyHtml,
+        },
+      ].slice(0, TRAIL_MAX);
+
+      const { text, html } = buildReplyEmail({
+        replyHtml,
+        replyText: body,
+        refLine,
+        sizeNote,
+        trail,
       });
 
       const { messageId } = await sendReply({
-        threadId: sr.gmailThreadId,
         to: sr.requester.email,
         cc,
         subject: `[${sr.ticketNumber}] Re: ${sr.subject}`,
         text,
         html,
-        inReplyTo: sr.lastEmailMessageId,
-        references: sr.lastEmailMessageId,
         attachments,
       });
       await prisma.serviceRequest.update({ where: { id }, data: { lastEmailMessageId: messageId } });

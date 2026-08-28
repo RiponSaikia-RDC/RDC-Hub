@@ -62,3 +62,13 @@ body {
 /* A table that's the whole message body shouldn't also carry its own outer
    border (the .table-scroll wrapper has one). */
 .hub-rich-text .table-scroll > table { border-left: 0; border-top: 0; }
+
+/* The contentEditable reply editor (RichTextEditor.tsx) reuses .hub-rich-text
+   for WYSIWYG, plus: */
+.hub-editor:focus { outline: none; }
+.hub-editor[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  @apply text-slate-400;
+  pointer-events: none;
+}
+.hub-editor[contenteditable] { -webkit-user-modify: read-write; }

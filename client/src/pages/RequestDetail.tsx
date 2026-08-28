@@ -4,7 +4,21 @@ import { api, API_BASE, ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { StatusBadge } from "../components/StatusBadge";
 import { RichText } from "../components/RichText";
+import { RichTextEditor } from "../components/RichTextEditor";
+import { EmailAutocomplete, Contact } from "../components/EmailAutocomplete";
 import { QueryType, RequestStatus, ServiceRequest, User } from "../types";
+
+/** Rough plain text of the editor's HTML — the server re-derives a cleaner
+ * version from the sanitised HTML; this is just for the client's own
+ * empty-check and the no-formatting fallback. */
+function htmlToText(html: string): string {
+  const el = document.createElement("div");
+  el.innerHTML = html
+    .replace(/<\/(p|div|li|h[1-6]|blockquote|tr)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n");
+  return (el.textContent || "").replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 
 const STATUS_FLOW: RequestStatus[] = ["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"];
 
@@ -14,9 +28,11 @@ export function RequestDetail() {
   const [sr, setSr] = useState<ServiceRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [commentBody, setCommentBody] = useState("");
+  // The reply editor's HTML (empty string = nothing typed).
+  const [commentHtml, setCommentHtml] = useState("");
   const [ccInput, setCcInput] = useState("");
   const [commentFiles, setCommentFiles] = useState<File[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [posting, setPosting] = useState(false);
   // Feedback shown right below the reply box: an error when the reply itself
   // failed, or a warning when the reply saved but emailing it to the plant
@@ -59,6 +75,7 @@ export function RequestDetail() {
     if (user?.role === "ADMIN" || user?.role === "MEMBER") {
       api.get<User[]>("/users").then((u) => setMembers(u.filter((m) => m.role === "MEMBER"))).catch(() => {});
       api.get<QueryType[]>("/query-types").then(setQueryTypes).catch(() => {});
+      api.get<Contact[]>("/contacts").then(setContacts).catch(() => {});
     }
   }, [user]);
 
@@ -69,28 +86,36 @@ export function RequestDetail() {
   const canPromoteToFaq = sr && user && (user.role === "ADMIN" || sr.assignedTo?.id === user.id);
   const showTeachPanel = sr && sr.source === "EMAIL" && !sr.keywordMatched && (user?.role === "ADMIN" || user?.role === "MEMBER");
 
+  const replyText = htmlToText(commentHtml);
+
   async function handleComment(e: FormEvent) {
     e.preventDefault();
-    if (!commentBody.trim() || !sr) return;
+    if (!replyText.trim() || !sr) return;
     setPosting(true);
     setReplyNotice(null);
     try {
       // Plain JSON when there's nothing to attach; multipart/form-data (so
       // the files ride along with the same request, and get emailed out
       // together with the reply — see requests.ts's POST /:id/comments)
-      // as soon as at least one file is picked.
+      // as soon as at least one file is picked. bodyHtml carries the
+      // formatting; body is the plain-text fallback / search text.
       type CommentResult = { emailDelivery?: { status: "sent" | "failed"; error?: string } | null };
       let result: CommentResult;
       if (commentFiles.length > 0) {
         const form = new FormData();
-        form.append("body", commentBody);
+        form.append("body", replyText);
+        form.append("bodyHtml", commentHtml);
         if (ccInput) form.append("cc", ccInput);
         commentFiles.forEach((f) => form.append("files", f));
         result = await api.post<CommentResult>(`/requests/${sr.id}/comments`, form);
       } else {
-        result = await api.post<CommentResult>(`/requests/${sr.id}/comments`, { body: commentBody, cc: ccInput || undefined });
+        result = await api.post<CommentResult>(`/requests/${sr.id}/comments`, {
+          body: replyText,
+          bodyHtml: commentHtml,
+          cc: ccInput || undefined,
+        });
       }
-      setCommentBody("");
+      setCommentHtml("");
       setCcInput("");
       setCommentFiles([]);
       if (result?.emailDelivery?.status === "failed") {
@@ -330,25 +355,21 @@ export function RequestDetail() {
             {sr.source === "EMAIL" && (
               <div className="space-y-1.5">
                 <p className="text-xs text-slate-500">
-                  This request came in by email — your reply will also be emailed to {sr.requester.email ?? "the sender"}
-                  {(sr.originalToRaw || sr.originalCcRaw) && " and everyone who was on the original email"}, with the
-                  original message quoted below it.
+                  This request came in by email — your reply is sent to {sr.requester.email ?? "the sender"} as a new
+                  message titled <span className="font-mono">[{sr.ticketNumber}] Re: …</span>, always Cc'ing the shared
+                  hub mailbox{(sr.originalToRaw || sr.originalCcRaw) && " and everyone who was on the original email"},
+                  with the earlier conversation quoted below it.
                 </p>
-                <input
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs"
+                <EmailAutocomplete
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
                   placeholder="Add more Cc recipients (comma-separated, optional)"
                   value={ccInput}
-                  onChange={(e) => setCcInput(e.target.value)}
+                  onChange={setCcInput}
+                  contacts={contacts}
                 />
               </div>
             )}
-            <textarea
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-              rows={3}
-              placeholder="Write a reply…"
-              value={commentBody}
-              onChange={(e) => setCommentBody(e.target.value)}
-            />
+            <RichTextEditor value={commentHtml} onChange={setCommentHtml} placeholder="Write a reply…" />
 
             {commentFiles.length > 0 && (
               <ul className="space-y-1">
@@ -392,7 +413,7 @@ export function RequestDetail() {
 
             <button
               type="submit"
-              disabled={posting || !commentBody.trim()}
+              disabled={posting || !replyText.trim()}
               className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
             >
               {posting ? "Posting…" : "Post Reply"}

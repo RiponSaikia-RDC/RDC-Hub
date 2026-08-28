@@ -14,6 +14,7 @@ import requestRoutes from "./routes/requests";
 import attachmentRoutes from "./routes/attachments";
 import faqRoutes from "./routes/faq";
 import adminRoutes from "./routes/admin";
+import contactRoutes from "./routes/contacts";
 import { startEmailPoller } from "./lib/emailPoller";
 
 const app = express();
@@ -38,6 +39,7 @@ app.use("/api/requests", requestRoutes);
 app.use("/api", attachmentRoutes); // mounts /api/requests/:id/attachments and /api/attachments/:id/download
 app.use("/api/faq", faqRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/contacts", contactRoutes);
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 

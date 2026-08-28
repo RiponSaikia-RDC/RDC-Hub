@@ -117,6 +117,16 @@ async function processMessage(id: string): Promise<void> {
     }
   }
 
+  // The Hub now Cc's the shared mailbox on every outbound reply, so a copy
+  // of our own message lands back in the inbox. Gmail's `-from:me` filter
+  // already excludes it, but match on our generated Message-ID too in case
+  // that ever slips (e.g. the hub account isn't the sending account).
+  if (sr && email.messageId && email.messageId === sr.lastEmailMessageId) {
+    await prisma.processedEmail.create({ data: { gmailMessageId: id } });
+    await gmail.markAsRead(id);
+    return;
+  }
+
   const requester = await findOrCreateRequester(email.fromEmail, email.fromName);
   // Strips quoted thread history and rejoins hard-wrapped lines — see
   // emailFormat.ts for why raw mail text needs this before it's stored/shown.

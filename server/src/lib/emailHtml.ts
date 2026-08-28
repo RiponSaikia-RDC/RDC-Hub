@@ -78,6 +78,8 @@ const SANITISE_OPTS: sanitizeHtml.IOptions = {
       background: COLOUR,
       "font-weight": [/^(bold|bolder|lighter|normal|[1-9]00)$/i],
       "font-style": [/^(italic|oblique|normal)$/i],
+      "font-family": [/^[\w\s,."'()-]{1,120}$/],
+      "font-size": [/^(\d{1,3}(\.\d+)?(px|pt|em|rem|%)|xx-small|x-small|small|smaller|medium|large|larger|x-large|xx-large)$/i],
       "text-decoration": [/^(underline|overline|line-through|none)(\s+\S+)*$/i],
       "text-decoration-line": [/^(underline|overline|line-through|none)$/i],
       "text-align": [/^(left|right|center|justify)$/i],
@@ -87,6 +89,17 @@ const SANITISE_OPTS: sanitizeHtml.IOptions = {
   allowedSchemesByTag: { a: ["http", "https", "mailto", "tel"] },
   transformTags: {
     a: sanitizeHtml.simpleTransform("a", { target: "_blank", rel: "noopener noreferrer" }),
+    // execCommand (older browsers / fontName) emits <font face/color/size> —
+    // fold it into a <span style> so the allowedStyles check still applies.
+    font: (_tag, attribs) => {
+      const style = [
+        attribs.color && `color:${attribs.color}`,
+        attribs.face && `font-family:${attribs.face}`,
+      ]
+        .filter(Boolean)
+        .join(";");
+      return { tagName: "span", attribs: { style } };
+    },
   },
   // Images, scripts, styles, remote objects: gone entirely (tags and text).
   nonTextTags: ["style", "script", "textarea", "option", "noscript", "head", "title"],
@@ -137,5 +150,15 @@ export function curateInboundHtml(rawHtml: string | null | undefined): string {
   if (!rawHtml) return "";
   const cut = cutQuotedAndSignature(rawHtml);
   const clean = tidy(sanitizeHtml(cut, SANITISE_OPTS));
+  return hasVisibleText(clean) ? clean : "";
+}
+
+/** Sanitises HTML the member composed in the Hub's reply editor before it's
+ * stored and emailed out. Same allowlist as inbound (formatting/colours/
+ * lists/tables/links; images/scripts/styles dropped) but NO quote/signature
+ * cutting - it's fresh content, not a received message. Returns "" if empty. */
+export function sanitizeOutboundHtml(html: string | null | undefined): string {
+  if (!html) return "";
+  const clean = tidy(sanitizeHtml(html, SANITISE_OPTS));
   return hasVisibleText(clean) ? clean : "";
 }

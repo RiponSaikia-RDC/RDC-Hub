@@ -194,8 +194,12 @@ export interface OutboundAttachment {
 }
 
 export interface SendReplyInput {
-  /** Gmail thread id to reply within, so it threads in Gmail's own UI too. */
-  threadId: string;
+  /** Gmail thread id to send within. Omit to send as a standalone message
+   * with its own subject line — which is what the Hub does now, so the
+   * "[SR-n] Re: …" ticket tag shows in Gmail's conversation list instead of
+   * being hidden behind the thread's original subject. The full prior
+   * conversation is quoted in the body instead (see replyEmail.ts). */
+  threadId?: string;
   to: string;
   /** Everyone else who should stay looped in — the original thread's other
    * recipients plus whatever the replying member added by hand. */
@@ -225,7 +229,8 @@ export interface SendReplyResult {
   messageId: string;
 }
 
-/** Sends a reply as the hub mailbox, within an existing Gmail thread. */
+/** Sends a reply as the hub mailbox — as a standalone message unless a
+ * threadId is given. */
 export async function sendReply(input: SendReplyInput): Promise<SendReplyResult> {
   const gmail = getClient();
   const domain = HUB_EMAIL!.split("@")[1] || "rdchub.local";
@@ -253,7 +258,7 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
 
   const res = await gmail.users.messages.send({
     userId: "me",
-    requestBody: { raw, threadId: input.threadId },
+    requestBody: input.threadId ? { raw, threadId: input.threadId } : { raw },
   });
 
   return { gmailMessageId: res.data.id!, messageId };
