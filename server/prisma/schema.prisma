@@ -96,7 +96,14 @@ model ServiceRequest {
   id            Int           @id @default(autoincrement())
   ticketNumber  String        @unique
   subject       String
+  // Plain-text body — always populated. Used for search, list previews,
+  // keyword routing, and as the render fallback when bodyHtml is null.
   body          String
+  // Sanitised, curated rich-text version of an inbound email body (bold,
+  // colours, lists, tables, links; images/scripts/signatures/quoted history
+  // stripped). Null for WEB requests and for plain-text-only inbound mail.
+  // See server/src/lib/emailHtml.ts.
+  bodyHtml      String?
   status        String        @default("OPEN")
   queryTypeId   Int
   plantId       Int
@@ -141,6 +148,9 @@ model Comment {
   srId      Int
   authorId  Int
   body      String
+  // Sanitised rich-text version of an inbound email reply — same treatment
+  // as ServiceRequest.bodyHtml. Null for WEB comments and plain-text mail.
+  bodyHtml  String?
   // "WEB" (posted from the Hub UI) or "EMAIL" (an inbound reply picked up
   // by the email poller).
   source    String   @default("WEB")

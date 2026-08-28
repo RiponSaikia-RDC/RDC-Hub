@@ -44,6 +44,10 @@ export interface Attachment {
 export interface Comment {
   id: number;
   body: string;
+  // Curated, server-sanitised rich-text version of an inbound email reply.
+  // Present only for source="EMAIL" replies that carried HTML; render this
+  // (through DOMPurify) in preference to `body` when set. See RichText.tsx.
+  bodyHtml?: string | null;
   createdAt: string;
   author: { id: number; name: string; role: Role };
   attachments: Attachment[];
@@ -57,6 +61,9 @@ export interface ServiceRequest {
   ticketNumber: string;
   subject: string;
   body: string;
+  // Curated, server-sanitised rich-text version of an inbound email body
+  // (source="EMAIL" only, when the email carried HTML). See RichText.tsx.
+  bodyHtml?: string | null;
   status: RequestStatus;
   createdAt: string;
   updatedAt: string;

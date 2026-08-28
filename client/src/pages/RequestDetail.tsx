@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { api, API_BASE, ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { StatusBadge } from "../components/StatusBadge";
+import { RichText } from "../components/RichText";
 import { QueryType, RequestStatus, ServiceRequest, User } from "../types";
 
 const STATUS_FLOW: RequestStatus[] = ["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"];
@@ -17,6 +18,10 @@ export function RequestDetail() {
   const [ccInput, setCcInput] = useState("");
   const [commentFiles, setCommentFiles] = useState<File[]>([]);
   const [posting, setPosting] = useState(false);
+  // Feedback shown right below the reply box: an error when the reply itself
+  // failed, or a warning when the reply saved but emailing it to the plant
+  // staff member didn't (source=EMAIL tickets only — see requests.ts).
+  const [replyNotice, setReplyNotice] = useState<{ type: "error" | "warn"; text: string } | null>(null);
   const [members, setMembers] = useState<User[]>([]);
   const [queryTypes, setQueryTypes] = useState<QueryType[]>([]);
   const [faqMessage, setFaqMessage] = useState<string | null>(null);
@@ -68,26 +73,40 @@ export function RequestDetail() {
     e.preventDefault();
     if (!commentBody.trim() || !sr) return;
     setPosting(true);
+    setReplyNotice(null);
     try {
       // Plain JSON when there's nothing to attach; multipart/form-data (so
       // the files ride along with the same request, and get emailed out
       // together with the reply — see requests.ts's POST /:id/comments)
       // as soon as at least one file is picked.
+      type CommentResult = { emailDelivery?: { status: "sent" | "failed"; error?: string } | null };
+      let result: CommentResult;
       if (commentFiles.length > 0) {
         const form = new FormData();
         form.append("body", commentBody);
         if (ccInput) form.append("cc", ccInput);
         commentFiles.forEach((f) => form.append("files", f));
-        await api.post(`/requests/${sr.id}/comments`, form);
+        result = await api.post<CommentResult>(`/requests/${sr.id}/comments`, form);
       } else {
-        await api.post(`/requests/${sr.id}/comments`, { body: commentBody, cc: ccInput || undefined });
+        result = await api.post<CommentResult>(`/requests/${sr.id}/comments`, { body: commentBody, cc: ccInput || undefined });
       }
       setCommentBody("");
       setCcInput("");
       setCommentFiles([]);
+      if (result?.emailDelivery?.status === "failed") {
+        setReplyNotice({
+          type: "warn",
+          text: `Reply saved, but emailing it to ${sr.requester.email ?? "the sender"} failed${
+            result.emailDelivery.error ? ` (${result.emailDelivery.error})` : ""
+          }. They have not received it — try again or contact them another way.`,
+        });
+      }
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not post the reply");
+      setReplyNotice({
+        type: "error",
+        text: err instanceof ApiError ? err.message : "Could not post the reply",
+      });
     } finally {
       setPosting(false);
     }
@@ -95,7 +114,13 @@ export function RequestDetail() {
 
   function addCommentFiles(fileList: FileList | null) {
     if (!fileList) return;
-    setCommentFiles((prev) => [...prev, ...Array.from(fileList)].slice(0, 5));
+    // Copy the FileList to a real array *now*, synchronously — the onChange
+    // handler clears the input's value immediately after calling this (so the
+    // same file can be re-picked), which empties this live FileList. Reading
+    // it inside the deferred setState updater would then see nothing, which
+    // is why picked files silently never appeared.
+    const picked = Array.from(fileList);
+    setCommentFiles((prev) => [...prev, ...picked].slice(0, 5));
   }
 
   function removeCommentFile(index: number) {
@@ -174,7 +199,9 @@ export function RequestDetail() {
 
   return (
     <div className="grid gap-6 lg:grid-cols-3">
-      <div className="space-y-4 lg:col-span-2">
+      {/* min-w-0 so a wide inbound-email table scrolls inside its card
+          (see .table-scroll) instead of stretching the grid column. */}
+      <div className="min-w-0 space-y-4 lg:col-span-2">
         <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-xs font-medium text-slate-500">
@@ -193,7 +220,7 @@ export function RequestDetail() {
             </div>
           </div>
           <h1 className="text-lg font-semibold text-slate-900">{sr.subject}</h1>
-          <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{sr.body}</p>
+          <RichText html={sr.bodyHtml} text={sr.body} className="mt-2" />
 
           {sr.attachments && sr.attachments.length > 0 && (
             <div className="mt-4 flex flex-wrap gap-2">
@@ -278,7 +305,7 @@ export function RequestDetail() {
                     </span>
                     <span>{new Date(c.createdAt).toLocaleString()}</span>
                   </div>
-                  <p className="whitespace-pre-wrap text-sm text-slate-700">{c.body}</p>
+                  <RichText html={c.bodyHtml} text={c.body} />
                   {c.attachments && c.attachments.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {c.attachments.map((a) => (
@@ -370,6 +397,16 @@ export function RequestDetail() {
             >
               {posting ? "Posting…" : "Post Reply"}
             </button>
+
+            {replyNotice && (
+              <p
+                className={`text-xs ${
+                  replyNotice.type === "error" ? "text-red-600" : "text-amber-700"
+                }`}
+              >
+                {replyNotice.text}
+              </p>
+            )}
           </form>
         </div>
       </div>

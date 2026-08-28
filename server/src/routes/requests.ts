@@ -235,7 +235,10 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
 
   // This ticket originated by email — send the reply back to the plant
   // staff member's inbox too, threaded under the original conversation.
-  // A send failure is logged but never blocks the in-app reply.
+  // A send failure never blocks the in-app reply, but it IS reported back
+  // in the response (emailDelivery, below) so the UI can warn instead of
+  // silently implying the plant staff member got it.
+  let emailDelivery: { status: "sent" | "failed"; error?: string } | null = null;
   if (sr.source === "EMAIL" && sr.gmailThreadId) {
     try {
       const hubEmail = (process.env.GMAIL_HUB_EMAIL || "").toLowerCase();
@@ -260,12 +263,10 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
         .split("\n")
         .map((line) => `> ${line}`)
         .join("\n");
-      const text = `${parsed.data.body}\n\n${quotedHeader}\n${quotedBody}`;
-      const html = buildReplyHtml({
-        replyText: parsed.data.body,
-        quoted: { header: quotedHeader, body: sr.body },
-      });
 
+      // Attachments: attach files that fit under Gmail's size cap; the rest
+      // still stay saved and downloadable in the Hub, with a note in the
+      // reply body pointing there instead of a bounced send.
       const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
       let attachments: OutboundAttachment[] | undefined;
       let sizeNote = "";
@@ -277,28 +278,43 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
             contentType: f.mimetype,
           }));
         } else {
-          sizeNote = `\n\n(${files.length} attachment(s) too large to email — view them in RDC Hub.)`;
+          sizeNote = `(${files.length} attachment(s) too large to email — view them in RDC Hub.)`;
         }
       }
+
+      // A visible ticket reference in the body — Gmail's conversation view
+      // shows only the thread's original subject, hiding the "[SR-n] Re: …"
+      // we set on the reply's Subject header, so plant staff (and anyone
+      // Cc'd) otherwise have no ticket number to quote back.
+      const refLine = `Ref: ${sr.ticketNumber} — please keep this reference on any reply. Sent via RDC Hub.`;
+      const replyBody = sizeNote ? `${parsed.data.body}\n\n${sizeNote}` : parsed.data.body;
+      const text = `${replyBody}\n\n${refLine}\n\n${quotedHeader}\n${quotedBody}`;
+      const html = buildReplyHtml({
+        replyText: replyBody,
+        footer: refLine,
+        quoted: { header: quotedHeader, body: sr.body },
+      });
 
       const { messageId } = await sendReply({
         threadId: sr.gmailThreadId,
         to: sr.requester.email,
         cc,
         subject: `[${sr.ticketNumber}] Re: ${sr.subject}`,
-        text: text + sizeNote,
-        html: sizeNote ? `${html}<p style="margin:16px 0 0;color:#6b7280;font-size:13px;">${sizeNote.trim()}</p>` : html,
+        text,
+        html,
         inReplyTo: sr.lastEmailMessageId,
         references: sr.lastEmailMessageId,
         attachments,
       });
       await prisma.serviceRequest.update({ where: { id }, data: { lastEmailMessageId: messageId } });
+      emailDelivery = { status: "sent" };
     } catch (err) {
       console.error(`[requests] Could not email reply for SR ${sr.ticketNumber}:`, err);
+      emailDelivery = { status: "failed", error: err instanceof Error ? err.message : "Unknown error" };
     }
   }
 
-  res.status(201).json(comment);
+  res.status(201).json({ ...comment, emailDelivery });
 });
 
 export default router;

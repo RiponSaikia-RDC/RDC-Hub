@@ -12,6 +12,7 @@ import crypto from "crypto";
 import { google, gmail_v1 } from "googleapis";
 import { simpleParser, ParsedMail, AddressObject } from "mailparser";
 import { convert as htmlToText } from "html-to-text";
+import { curateInboundHtml } from "./emailHtml";
 import MailComposer = require("nodemailer/lib/mail-composer");
 
 const CLIENT_ID = process.env.GMAIL_CLIENT_ID;
@@ -47,7 +48,13 @@ export interface InboundEmail {
   gmailMessageId: string;
   threadId: string;
   subject: string;
+  /** Plain-text body — always present (converted from HTML if that's all
+   * the sender shipped). Used for search, previews and keyword routing. */
   text: string;
+  /** Curated, sanitised rich-text version of the HTML body — bold/colours/
+   * lists/tables/links kept, images/scripts/signature/quoted-history
+   * stripped (see emailHtml.ts). Empty string for plain-text-only mail. */
+  html: string;
   fromName: string;
   fromEmail: string;
   date: Date | undefined;
@@ -113,6 +120,11 @@ function htmlToPlainText(html: string): string {
     selectors: [
       { selector: "a", options: { ignoreHref: true } },
       { selector: "img", format: "skip" },
+      // Render tables as aligned rows instead of concatenating every cell
+      // into one unreadable run (the daily driver-attendance reports are
+      // one big HTML table) — matters for search and the list preview,
+      // which use this plain-text body. The rich view uses the HTML.
+      { selector: "table", format: "dataTable" },
     ],
   });
 }
@@ -140,12 +152,14 @@ export async function getMessageRaw(id: string): Promise<InboundEmail> {
   // over whatever text/plain alternative the sender's client attached —
   // falling back to that alternative only when there's no HTML part at all.
   const text = parsed.html ? htmlToPlainText(parsed.html) : (parsed.text ?? "");
+  const html = parsed.html ? curateInboundHtml(parsed.html) : "";
 
   return {
     gmailMessageId: id,
     threadId: res.data.threadId ?? id,
     subject: parsed.subject ?? "(no subject)",
     text: text.trim(),
+    html,
     fromName: fromAddr?.name || fromAddr?.address || "Unknown",
     fromEmail: (fromAddr?.address || "").toLowerCase(),
     date: parsed.date,
@@ -154,6 +168,14 @@ export async function getMessageRaw(id: string): Promise<InboundEmail> {
     toEmails: flattenAddresses(parsed.to),
     ccEmails: flattenAddresses(parsed.cc),
   };
+}
+
+/** Message ids in a thread, oldest first — the first is the one that
+ * created the ticket. Used by the bodyHtml backfill script. */
+export async function listThreadMessageIds(threadId: string): Promise<string[]> {
+  const gmail = getClient();
+  const res = await gmail.users.threads.get({ userId: "me", id: threadId, format: "minimal" });
+  return (res.data.messages ?? []).map((m) => m.id!).filter(Boolean);
 }
 
 /** Removes the UNREAD label so this message isn't picked up again next poll. */

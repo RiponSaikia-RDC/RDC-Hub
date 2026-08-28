@@ -10,3 +10,55 @@
 body {
   @apply bg-slate-50 text-slate-900;
 }
+
+/* Curated rich-text rendering of inbound email bodies (see RichText.tsx).
+   Tailwind's preflight resets away list markers / heading sizes / table
+   borders, so restore just enough for an email to read naturally. */
+.hub-rich-text {
+  @apply text-sm leading-relaxed text-slate-700;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.hub-rich-text p { @apply my-2; }
+.hub-rich-text p:first-child { @apply mt-0; }
+.hub-rich-text p:last-child { @apply mb-0; }
+.hub-rich-text a { @apply text-brand-700 underline; }
+.hub-rich-text b,
+.hub-rich-text strong { @apply font-semibold; }
+.hub-rich-text ul { @apply my-2 list-disc pl-6; }
+.hub-rich-text ol { @apply my-2 list-decimal pl-6; }
+.hub-rich-text li { @apply my-0.5; }
+.hub-rich-text h1,
+.hub-rich-text h2,
+.hub-rich-text h3,
+.hub-rich-text h4 { @apply mb-1 mt-3 font-semibold text-slate-900; }
+.hub-rich-text h1 { @apply text-base; }
+.hub-rich-text h2,
+.hub-rich-text h3,
+.hub-rich-text h4 { @apply text-sm; }
+.hub-rich-text blockquote {
+  @apply my-2 border-l-2 border-slate-300 pl-3 text-slate-500;
+}
+.hub-rich-text pre {
+  @apply my-2 overflow-x-auto rounded bg-slate-100 p-2 text-xs;
+}
+.hub-rich-text code { @apply rounded bg-slate-100 px-1 py-0.5 text-xs; }
+.hub-rich-text hr { @apply my-3 border-slate-200; }
+/* Tables (the daily driver-attendance reports arrive as one) — scroll
+   sideways inside their own box rather than cramming into the card. */
+.hub-rich-text .table-scroll {
+  @apply my-2 overflow-x-auto rounded border border-slate-200;
+}
+.hub-rich-text table {
+  @apply border-collapse text-xs;
+  min-width: 100%;
+}
+.hub-rich-text th,
+.hub-rich-text td {
+  @apply border border-slate-200 px-2 py-1 text-left align-top;
+  white-space: nowrap;
+}
+.hub-rich-text th { @apply bg-slate-100 font-semibold; }
+/* A table that's the whole message body shouldn't also carry its own outer
+   border (the .table-scroll wrapper has one). */
+.hub-rich-text .table-scroll > table { border-left: 0; border-top: 0; }

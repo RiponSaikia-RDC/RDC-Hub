@@ -13,6 +13,10 @@
 //    "From:/Sent:/To:/Subject:" headers, or a run of "> " quoted lines).
 //    The Hub already keeps full thread history as separate comments, so
 //    re-storing that quoted copy every time just duplicates it.
+// 3. Converting an HTML body to text (see gmail.ts's htmlToPlainText) leaves
+//    a run of near-blank lines wherever the sender's client had an empty
+//    paragraph — Outlook puts one between every line — so a short message
+//    arrives double/triple-spaced. See collapseBlankLines below.
 
 /** Lines that mark the start of a quoted/forwarded block in a reply. Cut
  * everything from the first match onward. Deliberately conservative — false
@@ -67,12 +71,36 @@ function unwrapHardWrappedLines(text: string): string {
   return out.join("\n");
 }
 
+// Every character HTML→text conversion can leave sitting on an otherwise
+// empty line: normal space, tab, non-breaking space (Outlook's empty
+// `<p><o:p>&nbsp;</o:p></p>` spacer paragraphs become a lone U+00A0),
+// zero-width space, and BOM.
+const TRAILING_WHITESPACE = /[ \t ​﻿]+$/;
+
+/** Collapses the runs of blank lines that HTML→text conversion leaves
+ * behind. Outlook composes each line as its own paragraph with an empty
+ * spacer paragraph between them, which html-to-text renders as a
+ * whitespace-only line (a lone U+00A0, not actually empty) wrapped in its
+ * own blank lines — so a three-line message arrives triple-spaced and a
+ * naive `\n{3,}` collapse misses it. Strips each line's trailing whitespace
+ * first (which flattens those U+00A0-only lines to genuinely empty), then
+ * caps consecutive blank lines at one and trims blank lines off both ends. */
+function collapseBlankLines(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.replace(TRAILING_WHITESPACE, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /** Full cleanup pipeline for an inbound message body before it's stored as
  * a ServiceRequest/Comment body. Safe to call on an already-clean body
  * (e.g. nothing to unwrap) — it's a no-op in that case. */
 export function cleanInboundText(raw: string): string {
   const stripped = stripQuotedReply(raw || "");
-  return unwrapHardWrappedLines(stripped).trim();
+  const unwrapped = unwrapHardWrappedLines(stripped);
+  return collapseBlankLines(unwrapped);
 }
 
 export function escapeHtml(s: string): string {
@@ -98,17 +126,28 @@ function textToHtmlParagraphs(text: string): string {
 export interface ReplyHtmlInput {
   replyText: string;
   quoted?: { header: string; body: string } | null;
+  /** Small print rendered between the reply and the quoted original — used
+   * for the ticket reference line (see requests.ts), so the SR number is
+   * visible in the message body itself and not only in the Subject (which
+   * Gmail's conversation view hides behind the thread's original subject). */
+  footer?: string | null;
 }
 
 /** Builds the HTML alternative for an outbound reply: the new reply text as
- * normal paragraphs, followed by the quoted original in a Gmail-style
- * indented blockquote — instead of the plain-text version's "> "-prefixed
- * lines, which several mail clients (Outlook especially) render as a wall
- * of literal ">" characters rather than a visual quote. */
-export function buildReplyHtml({ replyText, quoted }: ReplyHtmlInput): string {
+ * normal paragraphs, an optional small-print footer, then the quoted
+ * original in a Gmail-style indented blockquote — instead of the plain-text
+ * version's "> "-prefixed lines, which several mail clients (Outlook
+ * especially) render as a wall of literal ">" characters rather than a
+ * visual quote. */
+export function buildReplyHtml({ replyText, quoted, footer }: ReplyHtmlInput): string {
   const body = `
     <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#1f2937;">
       ${textToHtmlParagraphs(replyText)}
+      ${
+        footer
+          ? `<p style="margin:16px 0 0;color:#6b7280;font-size:12px;">${escapeHtml(footer)}</p>`
+          : ""
+      }
       ${
         quoted
           ? `<blockquote style="margin:16px 0 0;padding:0 0 0 12px;border-left:3px solid #d1d5db;color:#6b7280;">

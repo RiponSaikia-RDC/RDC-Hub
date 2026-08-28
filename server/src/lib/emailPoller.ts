@@ -121,6 +121,10 @@ async function processMessage(id: string): Promise<void> {
   // Strips quoted thread history and rejoins hard-wrapped lines — see
   // emailFormat.ts for why raw mail text needs this before it's stored/shown.
   const cleanedBody = cleanInboundText(email.text) || "(no message body)";
+  // Curated rich-text version (bold/colours/tables/links kept, images and
+  // signature/quoted history stripped) — null when the sender only sent
+  // plain text, so the UI falls back to `body`. See emailHtml.ts.
+  const cleanedBodyHtml = email.html || null;
 
   if (sr) {
     const comment = await prisma.comment.create({
@@ -128,6 +132,7 @@ async function processMessage(id: string): Promise<void> {
         srId: sr.id,
         authorId: requester.id,
         body: cleanedBody,
+        bodyHtml: cleanedBodyHtml,
         source: "EMAIL",
         gmailMessageId: id,
       },
@@ -170,6 +175,7 @@ async function processMessage(id: string): Promise<void> {
             ticketNumber,
             subject: email.subject,
             body: cleanedBody,
+            bodyHtml: cleanedBodyHtml,
             queryTypeId,
             plantId,
             requesterId: requester.id,
