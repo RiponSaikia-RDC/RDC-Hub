@@ -7,6 +7,8 @@ export function Plants() {
   const [plants, setPlants] = useState<Plant[]>([]);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
+  const [area, setArea] = useState("");
+  const [businessHead, setBusinessHead] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   function load() {
@@ -19,9 +21,11 @@ export function Plants() {
     e.preventDefault();
     setError(null);
     try {
-      await api.post("/plants", { name, code });
+      await api.post("/plants", { name, code, area: area || undefined, businessHead: businessHead || undefined });
       setName("");
       setCode("");
+      setArea("");
+      setBusinessHead("");
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not add plant");
@@ -44,10 +48,10 @@ export function Plants() {
       <div className="mb-6">
         <CsvUploader
           title="Bulk Upload Plants"
-          description='CSV columns: "name", "code". Rows matching an existing plant name or code are skipped.'
+          description='CSV columns: "name", "code" (required); "type", "area", "businessHead", "segment" (optional). Rows matching an existing plant name or code are skipped.'
           templateFilename="rdc-hub-plants-template.csv"
-          templateHeaders={["name", "code"]}
-          templateSampleRow={["Plant 4", "PLT4"]}
+          templateHeaders={["name", "code", "type", "area", "businessHead", "segment"]}
+          templateSampleRow={["Plant 4", "PLT4", "Commercial", "Gujarat", "Jane Doe", "Major"]}
           onUpload={(file) => {
             const form = new FormData();
             form.append("file", file);
@@ -66,6 +70,8 @@ export function Plants() {
               <tr>
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">Code</th>
+                <th className="px-4 py-3">Area</th>
+                <th className="px-4 py-3">Business Head</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -74,6 +80,8 @@ export function Plants() {
                 <tr key={p.id}>
                   <td className="px-4 py-3">{p.name}</td>
                   <td className="px-4 py-3 text-slate-500">{p.code}</td>
+                  <td className="px-4 py-3 text-slate-500">{p.area || "—"}</td>
+                  <td className="px-4 py-3 text-slate-500">{p.businessHead || "—"}</td>
                   <td className="px-4 py-3 text-right">
                     <button onClick={() => handleDelete(p.id)} className="text-xs text-red-600 hover:underline">
                       Remove
@@ -100,6 +108,18 @@ export function Plants() {
             value={code}
             onChange={(e) => setCode(e.target.value)}
             required
+          />
+          <input
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder="Area (optional)"
+            value={area}
+            onChange={(e) => setArea(e.target.value)}
+          />
+          <input
+            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            placeholder="Business Head (optional)"
+            value={businessHead}
+            onChange={(e) => setBusinessHead(e.target.value)}
           />
           {error && <p className="text-sm text-red-600">{error}</p>}
           <button type="submit" className="w-full rounded-md bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700">

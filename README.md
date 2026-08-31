@@ -108,9 +108,9 @@ below). Everyone who does log in sees a role-specific dashboard:
    Service (e.g. via NSSM or `node-windows`) with IIS as a reverse proxy
    in front of it for SSL/hostname routing — or hosted directly on a
    cloud VM/App Service if you go that route instead.
-5. **File uploads**: currently stored on local disk under
-   `server/uploads/`. If you run more than one server instance, point
-   this at shared/network storage.
+5. **File uploads**: stored on local disk under `server/uploads/` by
+   default. If you run more than one server instance, set `UPLOAD_DIR` in
+   `server/.env` to a shared/network path — no code change needed.
 6. **Email intake**: see [Email intake (Gmail)](#email-intake-gmail) below
    — it needs its own one-time Google Cloud OAuth setup independent of the
    rest of deployment.
@@ -159,8 +159,51 @@ back to the sender (`server/src/lib/gmail.ts`'s `sendReply`), threaded
 under the original conversation; a further reply from the sender is
 appended to the same ticket as a new comment.
 
-**One-time setup**, using the dedicated Gmail account itself (not your
-personal one):
+There are two ways to authorize the hub mailbox — pick one:
+
+### Option A: Workspace service account (recommended for `distribution@rdc.in`)
+
+Since `distribution@rdc.in` lives on the company's Google Workspace
+domain, this is the better option: **replies send as `distribution@rdc.in`
+itself** (no "send as" alias needed), and there's **no refresh token to
+expire** — nothing to re-run every ~7 days. It needs a one-time setup by
+whoever has Google Workspace Admin access for `rdc.in`, plus Cloud Console
+access (both can be the same person as the OAuth option below):
+
+1. In [console.cloud.google.com](https://console.cloud.google.com), create
+   (or reuse) a project, then **APIs & Services > Library**: enable the
+   **Gmail API**.
+2. **IAM & Admin > Service Accounts > Create Service Account** — any name
+   (e.g. "rdc-hub-gmail"). No roles needed on the account itself.
+3. Open the new service account > **Keys > Add Key > Create new key >
+   JSON**. This downloads a `.json` key file — save it as
+   `server/gmail-service-account.json` (already gitignored — never commit
+   it). Note the service account's **Client ID** (a long number, on the
+   service account's Details tab), needed for the next step.
+4. In the [Google Workspace Admin console](https://admin.google.com)
+   (needs a Workspace super admin for `rdc.in`): **Security > Access and
+   data control > API controls > Domain-wide delegation > Add new**.
+     - **Client ID**: the service account's Client ID from step 3.
+     - **OAuth scopes**: `https://mail.google.com/`
+     - Authorize.
+5. In `server/.env`, set:
+   ```
+   GMAIL_SERVICE_ACCOUNT_KEY_PATH=./gmail-service-account.json
+   GMAIL_HUB_EMAIL=distribution@rdc.in
+   ```
+   (Leave `GMAIL_CLIENT_ID`/`GMAIL_CLIENT_SECRET`/`GMAIL_REFRESH_TOKEN`
+   blank — they're not used when a service account key is set.)
+6. Restart the server. Startup logs confirm whether email intake is
+   enabled; Admin > Overview also shows live poll status. `npm run
+   gmail:diag` (from `server/`) works with this setup too, for
+   troubleshooting.
+
+### Option B: personal OAuth account
+
+Simpler to set up, but the mailbox must be a personal-style Gmail account
+you can sign into interactively, replies send from whichever account signs
+in (with that account's name, unless it has a verified "send as" alias for
+the hub address), and the refresh token needs periodic renewal:
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com) and
    create a new project.
@@ -185,7 +228,8 @@ heavy for a small internal tool), Google may expire the refresh token
 after a period of inactivity or after ~7 days for unverified apps. If
 email intake stops working, re-run `npm run gmail:auth` to mint a fresh
 token — it takes about two minutes. The server logs loudly (and Admin >
-Overview shows it) when auth fails, so this isn't a silent failure.
+Overview shows it) when auth fails, so this isn't a silent failure. This
+is exactly what Option A avoids.
 
 Routing is controlled from **Admin > Query Types**: give each query type
 comma-separated keywords, and mark exactly one as the "email default" —

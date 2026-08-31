@@ -15,6 +15,10 @@ router.get("/", requireAuth, async (_req, res) => {
 const plantSchema = z.object({
   name: z.string().min(1),
   code: z.string().min(1),
+  type: z.string().trim().min(1).optional().nullable(),
+  area: z.string().trim().min(1).optional().nullable(),
+  businessHead: z.string().trim().min(1).optional().nullable(),
+  segment: z.string().trim().min(1).optional().nullable(),
 });
 
 router.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => {
@@ -28,7 +32,8 @@ router.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => {
   }
 });
 
-// Bulk import via CSV. Expected headers: name, code.
+// Bulk import via CSV. Required headers: name, code. Optional: type, area,
+// businessHead, segment.
 router.post("/bulk", requireAuth, requireRole("ADMIN"), csvUpload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
@@ -52,6 +57,10 @@ router.post("/bulk", requireAuth, requireRole("ADMIN"), csvUpload.single("file")
     const rowNum = i + 2; // +1 for 0-index, +1 for the header row
     const name = rows[i].name?.trim();
     const code = rows[i].code?.trim();
+    const type = rows[i].type?.trim() || undefined;
+    const area = rows[i].area?.trim() || undefined;
+    const businessHead = rows[i].businessHead?.trim() || undefined;
+    const segment = rows[i].segment?.trim() || undefined;
 
     if (!name || !code) {
       results.push({ row: rowNum, status: "error", message: "name and code are both required", name, code });
@@ -63,7 +72,7 @@ router.post("/bulk", requireAuth, requireRole("ADMIN"), csvUpload.single("file")
     }
 
     try {
-      await prisma.plant.create({ data: { name, code } });
+      await prisma.plant.create({ data: { name, code, type, area, businessHead, segment } });
       seenNames.add(name.toLowerCase());
       seenCodes.add(code.toLowerCase());
       results.push({ row: rowNum, status: "created", name, code });

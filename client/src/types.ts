@@ -5,6 +5,10 @@ export interface Plant {
   id: number;
   name: string;
   code: string;
+  type?: string | null;
+  area?: string | null;
+  businessHead?: string | null;
+  segment?: string | null;
 }
 
 export interface QueryType {

@@ -4,6 +4,8 @@ build/
 *.log
 .env
 .env.local
+server/*service-account*.json
+Plant Details.xlsx
 server/uploads/*
 !server/uploads/.gitkeep
 server/prisma/dev.db

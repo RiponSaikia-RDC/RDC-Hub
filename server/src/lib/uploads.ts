@@ -7,7 +7,13 @@ import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
 
-export const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
+// Defaults to server/uploads on local disk. Set UPLOAD_DIR in .env to move
+// this to shared/network storage (needed if you ever run more than one
+// server instance) — every reader of this constant (attachments.ts,
+// requests.ts, emailPoller.ts) picks it up with no other code change.
+export const UPLOAD_DIR = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.join(__dirname, "..", "..", "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // No mimetype allow-list: attachments are opaque blobs to the Hub, same as

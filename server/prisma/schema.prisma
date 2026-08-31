@@ -24,6 +24,13 @@ model Plant {
   id        Int      @id @default(autoincrement())
   name      String   @unique
   code      String   @unique
+  // Optional reference fields from the company's plant master list
+  // (Type/Area/Business Head/Type 2 columns) — informational only, not
+  // used by any routing logic.
+  type          String? // "Commercial" | "Captive"
+  area          String? // region/city grouping, e.g. "Gujarat", "Bangalore"
+  businessHead  String?
+  segment       String? // spreadsheet's "Type 2" column, e.g. "Major", "Single/Double", "Captive"
   createdAt DateTime @default(now())
 
   users    User[]

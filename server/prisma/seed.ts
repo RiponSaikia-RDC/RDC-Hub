@@ -1,7 +1,15 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 const prisma = new PrismaClient();
+
+// Random per-install password instead of a fixed, publicly-known default
+// (this file is in source control) — every fresh clone gets its own.
+function randomPassword(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%^&*";
+  return Array.from({ length: 16 }, () => chars[crypto.randomInt(chars.length)]).join("");
+}
 
 async function main() {
   const plants = await Promise.all(
@@ -26,7 +34,8 @@ async function main() {
     ].map((qt) => prisma.queryType.upsert({ where: { name: qt.name }, update: {}, create: qt }))
   );
 
-  const passwordHash = await bcrypt.hash("ChangeMe123!", 10);
+  const plainPassword = randomPassword();
+  const passwordHash = await bcrypt.hash(plainPassword, 10);
 
   const admin = await prisma.user.upsert({
     where: { username: "admin" },
@@ -83,9 +92,12 @@ async function main() {
   });
 
   console.log("Seed complete.");
-  console.log("Login with any of these (password: ChangeMe123!):");
+  console.log(`Login with either of these (password: ${plainPassword}):`);
   console.log(`  admin   -> ${admin.username}`);
   console.log(`  member  -> ${member.username}`);
+  console.log("(This password is generated fresh each time this script creates these users for the");
+  console.log(" first time — it won't be shown again, and re-running the seed on an existing DB won't");
+  console.log(" change it. Use each user's Admin > Users > Set password action to change it later.)");
   console.log(`(Plant Staff, e.g. "${staff.username}", is a directory record only — no login; they interact by email.)`);
 }
 

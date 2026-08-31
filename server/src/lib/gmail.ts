@@ -1,13 +1,29 @@
 // Gmail API integration for the email-intake workflow: a dedicated Gmail
 // mailbox (GMAIL_HUB_EMAIL) receives plant-staff email, this module reads
 // it and sends replies. See server/src/lib/emailPoller.ts for how it's
-// used, and README.md's "Email intake (Gmail)" section for one-time OAuth
-// setup (npm run gmail:auth).
+// used, and README.md's "Email intake (Gmail)" section for setup.
 //
-// Auth model: OAuth2 "installed app" (loopback) flow, run once via
-// server/src/scripts/gmailAuth.ts to mint a refresh token that's then
-// stored in .env. No SMTP is involved — sending goes through the Gmail API
-// too, via a MIME message built with nodemailer's MailComposer.
+// Two auth models are supported, tried in this order:
+//
+//  1. Service account + domain-wide delegation (GMAIL_SERVICE_ACCOUNT_KEY_PATH).
+//     Recommended for a real rdc.in Workspace mailbox: a Workspace admin
+//     authorizes the service account once (no OAuth consent screen, no
+//     "Testing" mode, no refresh token to expire), and the service account
+//     impersonates GMAIL_HUB_EMAIL directly — mail is authenticated AND
+//     sent as that mailbox itself, so no Gmail "send as" alias is needed
+//     either. See README.md's "Email intake (Gmail)" section for the
+//     one-time setup steps.
+//  2. OAuth2 "installed app" (loopback) flow (GMAIL_CLIENT_ID/SECRET/
+//     REFRESH_TOKEN) — the original personal-account flow, run once via
+//     server/src/scripts/gmailAuth.ts to mint a refresh token stored in
+//     .env. Simpler to set up but the refresh token expires after ~7 days
+//     while the Google Cloud OAuth app is in "Testing" publishing status,
+//     and mail sends as whichever account did the OAuth consent (with that
+//     account's name/address) unless it has a verified "send as" alias for
+//     GMAIL_HUB_EMAIL.
+//
+// No SMTP is involved either way — sending goes through the Gmail API too,
+// via a MIME message built with nodemailer's MailComposer.
 import crypto from "crypto";
 import { google, gmail_v1 } from "googleapis";
 import { simpleParser, ParsedMail, AddressObject } from "mailparser";
@@ -19,22 +35,44 @@ const CLIENT_ID = process.env.GMAIL_CLIENT_ID;
 const CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN;
 const HUB_EMAIL = process.env.GMAIL_HUB_EMAIL;
+const SERVICE_ACCOUNT_KEY_PATH = process.env.GMAIL_SERVICE_ACCOUNT_KEY_PATH;
 
-/** True once all four GMAIL_* env vars are set. Every function below is a
- * no-op (or throws, for callers that must check first) when this is false,
- * so the app runs fine with the feature unconfigured. */
-export const isGmailConfigured = Boolean(CLIENT_ID && CLIENT_SECRET && REFRESH_TOKEN && HUB_EMAIL);
+// Full Gmail access — matches the scope gmailAuth.ts's OAuth flow requests,
+// so either auth model can read, modify labels, and send.
+const GMAIL_SCOPES = ["https://mail.google.com/"];
+
+const usingServiceAccount = Boolean(SERVICE_ACCOUNT_KEY_PATH && HUB_EMAIL);
+
+/** True once enough GMAIL_* env vars are set for one of the two auth
+ * models above. Every function below is a no-op (or throws, for callers
+ * that must check first) when this is false, so the app runs fine with
+ * the feature unconfigured. */
+export const isGmailConfigured = usingServiceAccount || Boolean(CLIENT_ID && CLIENT_SECRET && REFRESH_TOKEN && HUB_EMAIL);
 
 let cachedClient: gmail_v1.Gmail | null = null;
 
 function getClient(): gmail_v1.Gmail {
   if (!isGmailConfigured) {
-    throw new Error("Gmail is not configured — set GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN/GMAIL_HUB_EMAIL in .env");
+    throw new Error(
+      "Gmail is not configured — set GMAIL_SERVICE_ACCOUNT_KEY_PATH+GMAIL_HUB_EMAIL, or GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN/GMAIL_HUB_EMAIL, in .env"
+    );
   }
   if (cachedClient) return cachedClient;
-  const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
-  oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
-  cachedClient = google.gmail({ version: "v1", auth: oauth2Client });
+
+  if (usingServiceAccount) {
+    const authClient = new google.auth.JWT({
+      keyFile: SERVICE_ACCOUNT_KEY_PATH,
+      scopes: GMAIL_SCOPES,
+      // Domain-wide delegation: impersonate the hub mailbox itself rather
+      // than the service account's own (non-mailbox) identity.
+      subject: HUB_EMAIL,
+    });
+    cachedClient = google.gmail({ version: "v1", auth: authClient });
+  } else {
+    const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
+    oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
+    cachedClient = google.gmail({ version: "v1", auth: oauth2Client });
+  }
   return cachedClient;
 }
 

@@ -6,15 +6,24 @@ import "dotenv/config";
 import { google } from "googleapis";
 
 async function main() {
-  const { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN, GMAIL_HUB_EMAIL } = process.env;
-  if (!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN || !GMAIL_HUB_EMAIL) {
-    console.error("GMAIL_* env vars aren't all set — nothing to check.");
+  const { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN, GMAIL_HUB_EMAIL, GMAIL_SERVICE_ACCOUNT_KEY_PATH } = process.env;
+
+  let gmail: ReturnType<typeof google.gmail>;
+  if (GMAIL_SERVICE_ACCOUNT_KEY_PATH && GMAIL_HUB_EMAIL) {
+    const authClient = new google.auth.JWT({
+      keyFile: GMAIL_SERVICE_ACCOUNT_KEY_PATH,
+      scopes: ["https://mail.google.com/"],
+      subject: GMAIL_HUB_EMAIL,
+    });
+    gmail = google.gmail({ version: "v1", auth: authClient });
+  } else if (GMAIL_CLIENT_ID && GMAIL_CLIENT_SECRET && GMAIL_REFRESH_TOKEN && GMAIL_HUB_EMAIL) {
+    const oauth2Client = new google.auth.OAuth2(GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET);
+    oauth2Client.setCredentials({ refresh_token: GMAIL_REFRESH_TOKEN });
+    gmail = google.gmail({ version: "v1", auth: oauth2Client });
+  } else {
+    console.error("GMAIL_* env vars aren't set — nothing to check (need either GMAIL_SERVICE_ACCOUNT_KEY_PATH+GMAIL_HUB_EMAIL, or the GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN/HUB_EMAIL quartet).");
     process.exit(1);
   }
-
-  const oauth2Client = new google.auth.OAuth2(GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET);
-  oauth2Client.setCredentials({ refresh_token: GMAIL_REFRESH_TOKEN });
-  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
   const profile = await gmail.users.getProfile({ userId: "me" });
   console.log(`Authenticated as: ${profile.data.emailAddress}`);

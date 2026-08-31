@@ -12,8 +12,7 @@ import { matchQueryType } from "./emailRouter";
 import { pickAssignee } from "./assignmentPicker";
 import { nextTicketNumber } from "./ticketNumber";
 import { cleanInboundText } from "./emailFormat";
-
-const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
+import { UPLOAD_DIR } from "./uploads";
 
 // Outbound replies (see requests.ts) tag their subject with
 // "Re: ... [TICKET-xxxx]" — if a mail client mangles Gmail's own thread
