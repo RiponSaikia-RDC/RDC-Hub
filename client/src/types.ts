@@ -35,6 +35,10 @@ export interface User {
   activated: boolean;
   plantId: number | null;
   plant?: Plant | null;
+  // Set once an admin runs `npm run gmail:connect` for this account — the
+  // address their Hub replies then send from. Null until then.
+  gmailConnectedEmail?: string | null;
+  gmailConnectedAt?: string | null;
 }
 
 export interface Attachment {

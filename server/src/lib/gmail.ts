@@ -1,26 +1,27 @@
-// Gmail API integration for the email-intake workflow: a dedicated Gmail
-// mailbox (GMAIL_HUB_EMAIL) receives plant-staff email, this module reads
-// it and sends replies. See server/src/lib/emailPoller.ts for how it's
-// used, and README.md's "Email intake (Gmail)" section for setup.
+// Gmail API integration for the email-intake workflow: plant-staff email
+// addressed to GMAIL_HUB_EMAIL is read from GMAIL_INBOX_ACCOUNT's inbox and
+// turned into tickets; replies are sent as whichever Hub member/admin wrote
+// them. See server/src/lib/emailPoller.ts for how it's used, and
+// README.md's "Email intake (Gmail)" section for setup.
 //
 // Two auth models are supported, tried in this order:
 //
 //  1. Service account + domain-wide delegation (GMAIL_SERVICE_ACCOUNT_KEY_PATH).
-//     Recommended for a real rdc.in Workspace mailbox: a Workspace admin
-//     authorizes the service account once (no OAuth consent screen, no
-//     "Testing" mode, no refresh token to expire), and the service account
-//     impersonates GMAIL_HUB_EMAIL directly — mail is authenticated AND
-//     sent as that mailbox itself, so no Gmail "send as" alias is needed
-//     either. See README.md's "Email intake (Gmail)" section for the
-//     one-time setup steps.
+//     Required for per-member "send as" — a Workspace admin authorizes the
+//     service account once (no OAuth consent screen, no "Testing" mode, no
+//     refresh token to expire), and it can then impersonate *any* mailbox
+//     on the domain: GMAIL_INBOX_ACCOUNT to read incoming mail, and each
+//     Hub member's own address when their reply is sent — genuinely
+//     authenticated and sent as that person, landing in their own Sent
+//     folder too, no Gmail "send as" alias needed. See README.md's "Email
+//     intake (Gmail)" section for the one-time setup steps.
 //  2. OAuth2 "installed app" (loopback) flow (GMAIL_CLIENT_ID/SECRET/
 //     REFRESH_TOKEN) — the original personal-account flow, run once via
 //     server/src/scripts/gmailAuth.ts to mint a refresh token stored in
-//     .env. Simpler to set up but the refresh token expires after ~7 days
-//     while the Google Cloud OAuth app is in "Testing" publishing status,
-//     and mail sends as whichever account did the OAuth consent (with that
-//     account's name/address) unless it has a verified "send as" alias for
-//     GMAIL_HUB_EMAIL.
+//     .env. Simpler to set up, but can only ever act as the one account
+//     that did the OAuth consent — no per-member sending — and the refresh
+//     token expires after ~7 days while the Google Cloud OAuth app is in
+//     "Testing" publishing status.
 //
 // No SMTP is involved either way — sending goes through the Gmail API too,
 // via a MIME message built with nodemailer's MailComposer.
@@ -29,12 +30,20 @@ import { google, gmail_v1 } from "googleapis";
 import { simpleParser, ParsedMail, AddressObject } from "mailparser";
 import { convert as htmlToText } from "html-to-text";
 import { curateInboundHtml } from "./emailHtml";
+import { decryptSecret } from "./tokenCrypto";
 import MailComposer = require("nodemailer/lib/mail-composer");
 
 const CLIENT_ID = process.env.GMAIL_CLIENT_ID;
 const CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN;
+// The address plant staff email (may be a Google Group, not a real
+// mailbox — used only for the inbox search filter and CC'd on replies).
 const HUB_EMAIL = process.env.GMAIL_HUB_EMAIL;
+// The real Workspace mailbox whose inbox actually receives that mail —
+// e.g. the person GMAIL_HUB_EMAIL's Group forwards to. Only meaningful (and
+// only needed) under the service-account auth model; falls back to
+// HUB_EMAIL when unset, for setups where the hub address IS a real mailbox.
+const INBOX_ACCOUNT = process.env.GMAIL_INBOX_ACCOUNT || HUB_EMAIL;
 const SERVICE_ACCOUNT_KEY_PATH = process.env.GMAIL_SERVICE_ACCOUNT_KEY_PATH;
 
 // Full Gmail access — matches the scope gmailAuth.ts's OAuth flow requests,
@@ -49,31 +58,76 @@ const usingServiceAccount = Boolean(SERVICE_ACCOUNT_KEY_PATH && HUB_EMAIL);
  * the feature unconfigured. */
 export const isGmailConfigured = usingServiceAccount || Boolean(CLIENT_ID && CLIENT_SECRET && REFRESH_TOKEN && HUB_EMAIL);
 
-let cachedClient: gmail_v1.Gmail | null = null;
+/** True when the active auth model can impersonate an arbitrary mailbox
+ * per call (service account) rather than being stuck as one fixed account
+ * (OAuth) — routes/requests.ts uses this to decide whether it can send a
+ * reply as the individual member who wrote it. */
+export const canSendAsIndividual = usingServiceAccount;
 
-function getClient(): gmail_v1.Gmail {
+// One JWT client per impersonated subject (service account mode), or a
+// single shared client (OAuth mode, which has only one possible identity).
+const clientCache = new Map<string, gmail_v1.Gmail>();
+
+/** @param subject Under the service-account model, the mailbox to
+ * impersonate for this call — defaults to INBOX_ACCOUNT (reading mail,
+ * system notifications). Pass a specific member's email to send as them.
+ * Ignored under the OAuth model, which has only the one identity. */
+function getClient(subject?: string): gmail_v1.Gmail {
   if (!isGmailConfigured) {
     throw new Error(
       "Gmail is not configured — set GMAIL_SERVICE_ACCOUNT_KEY_PATH+GMAIL_HUB_EMAIL, or GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN/GMAIL_HUB_EMAIL, in .env"
     );
   }
-  if (cachedClient) return cachedClient;
 
   if (usingServiceAccount) {
+    const effectiveSubject = subject || INBOX_ACCOUNT!;
+    const cached = clientCache.get(effectiveSubject);
+    if (cached) return cached;
     const authClient = new google.auth.JWT({
       keyFile: SERVICE_ACCOUNT_KEY_PATH,
       scopes: GMAIL_SCOPES,
-      // Domain-wide delegation: impersonate the hub mailbox itself rather
-      // than the service account's own (non-mailbox) identity.
-      subject: HUB_EMAIL,
+      // Domain-wide delegation: impersonate the given mailbox rather than
+      // the service account's own (non-mailbox) identity.
+      subject: effectiveSubject,
     });
-    cachedClient = google.gmail({ version: "v1", auth: authClient });
-  } else {
-    const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
-    oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
-    cachedClient = google.gmail({ version: "v1", auth: oauth2Client });
+    const client = google.gmail({ version: "v1", auth: authClient });
+    clientCache.set(effectiveSubject, client);
+    return client;
   }
-  return cachedClient;
+
+  const cached = clientCache.get("oauth");
+  if (cached) return cached;
+  const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
+  oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
+  const client = google.gmail({ version: "v1", auth: oauth2Client });
+  clientCache.set("oauth", client);
+  return client;
+}
+
+// --- Per-person "send as yourself" (see gmailConnectUser.ts) ---
+//
+// Independent of the two models above: each Hub member/admin can connect
+// their own Gmail account once (via `npm run gmail:connect`, run by an
+// admin with them), which mints a personal refresh token via the same
+// GMAIL_CLIENT_ID/SECRET OAuth app, scoped to gmail.send only (not full
+// mailbox access — sending is all this needs). requests.ts passes the
+// replying user's stored (encrypted) token in; sendReply tries it before
+// falling back to whichever of the two models above is configured for the
+// shared hub identity.
+const userClientCache = new Map<string, gmail_v1.Gmail>();
+
+function getClientForUser(refreshTokenEnc: string): gmail_v1.Gmail {
+  if (!CLIENT_ID || !CLIENT_SECRET) {
+    throw new Error("GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET must be set for per-person Gmail connections, even under the service-account model");
+  }
+  const cached = userClientCache.get(refreshTokenEnc);
+  if (cached) return cached;
+  const refreshToken = decryptSecret(refreshTokenEnc);
+  const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  const client = google.gmail({ version: "v1", auth: oauth2Client });
+  userClientCache.set(refreshTokenEnc, client);
+  return client;
 }
 
 export interface InboundAttachment {
@@ -242,6 +296,16 @@ export interface SendReplyInput {
   /** Everyone else who should stay looped in — the original thread's other
    * recipients plus whatever the replying member added by hand. */
   cc?: string[];
+  /** The Hub member/admin who wrote this reply, and their encrypted Gmail
+   * refresh token (User.gmailRefreshTokenEnc) if they've connected their
+   * own account (see gmailConnectUser.ts) — when both are set, the mail is
+   * genuinely authenticated AND sent as this person (their own Sent folder
+   * gets a copy too). Falls back, in order, to domain-wide-delegation
+   * impersonation (if that auth model is configured) and then the generic
+   * hub identity. */
+  fromEmail?: string;
+  fromName?: string;
+  fromRefreshTokenEnc?: string;
   subject: string;
   text: string;
   /** HTML alternative of `text` — see emailFormat.ts's buildReplyHtml.
@@ -265,17 +329,19 @@ export interface SendReplyResult {
    * store this as ServiceRequest.lastEmailMessageId for the next reply's
    * In-Reply-To/References chain. */
   messageId: string;
+  /** The mailbox actually used as sender. */
+  sentAs: string;
+  /** True when input.fromEmail was requested but couldn't be used (not a
+   * real Workspace mailbox, delegation not authorized for it, etc.) and
+   * the send fell back to the hub identity instead — the reply still went
+   * out, just not from who it should have. Callers should surface this so
+   * it doesn't go unnoticed (e.g. a wrong email on a user's account). */
+  fellBackToHub: boolean;
 }
 
-/** Sends a reply as the hub mailbox — as a standalone message unless a
- * threadId is given. */
-export async function sendReply(input: SendReplyInput): Promise<SendReplyResult> {
-  const gmail = getClient();
-  const domain = HUB_EMAIL!.split("@")[1] || "rdchub.local";
-  const messageId = `<${crypto.randomUUID()}@${domain}>`;
-
+async function composeAndSend(gmail: gmail_v1.Gmail, from: string, input: SendReplyInput, messageId: string) {
   const mail = new MailComposer({
-    from: `RDC Hub <${HUB_EMAIL}>`,
+    from,
     to: input.to,
     cc: input.cc?.length ? input.cc.join(", ") : undefined,
     subject: input.subject,
@@ -290,16 +356,53 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
       contentType: a.contentType,
     })),
   });
-
   const rawBuffer: Buffer = await mail.compile().build();
   const raw = rawBuffer.toString("base64url");
-
-  const res = await gmail.users.messages.send({
+  return gmail.users.messages.send({
     userId: "me",
     requestBody: input.threadId ? { raw, threadId: input.threadId } : { raw },
   });
+}
 
-  return { gmailMessageId: res.data.id!, messageId };
+/** Sends a reply — as the individual Hub member who wrote it when possible
+ * (tries their own connected token first, then domain-wide-delegation
+ * impersonation if that auth model is configured), falling back to the
+ * hub identity if neither works or applies. Standalone message unless a
+ * threadId is given. */
+export async function sendReply(input: SendReplyInput): Promise<SendReplyResult> {
+  const domain = HUB_EMAIL!.split("@")[1] || "rdchub.local";
+  const messageId = `<${crypto.randomUUID()}@${domain}>`;
+  const hubFrom = `RDC Hub <${INBOX_ACCOUNT}>`;
+  const from = `${input.fromName || input.fromEmail} <${input.fromEmail}>`;
+
+  if (input.fromEmail && input.fromRefreshTokenEnc) {
+    try {
+      const gmail = getClientForUser(input.fromRefreshTokenEnc);
+      const res = await composeAndSend(gmail, from, input, messageId);
+      return { gmailMessageId: res.data.id!, messageId, sentAs: input.fromEmail, fellBackToHub: false };
+    } catch (err) {
+      console.error(`[gmail] Could not send as ${input.fromEmail} using their connected account (falling back):`, err);
+      // Fall through — try domain delegation, then the hub identity.
+    }
+  }
+
+  if (input.fromEmail && canSendAsIndividual) {
+    try {
+      const gmail = getClient(input.fromEmail);
+      const res = await composeAndSend(gmail, from, input, messageId);
+      return { gmailMessageId: res.data.id!, messageId, sentAs: input.fromEmail, fellBackToHub: false };
+    } catch (err) {
+      console.error(
+        `[gmail] Could not send as ${input.fromEmail} (falling back to the hub identity — check this address is a real mailbox and domain-wide delegation is authorized for it):`,
+        err
+      );
+      // Fall through to the hub-identity send below.
+    }
+  }
+
+  const gmail = getClient();
+  const res = await composeAndSend(gmail, hubFrom, input, messageId);
+  return { gmailMessageId: res.data.id!, messageId, sentAs: INBOX_ACCOUNT!, fellBackToHub: Boolean(input.fromEmail) };
 }
 
 /** Sends a standalone email as the hub mailbox — no thread/ticket
@@ -311,7 +414,7 @@ export async function sendMail(input: { to: string; subject: string; text: strin
   if (!isGmailConfigured) return;
   const gmail = getClient();
   const mail = new MailComposer({
-    from: `RDC Hub <${HUB_EMAIL}>`,
+    from: `RDC Hub <${INBOX_ACCOUNT}>`,
     to: input.to,
     subject: input.subject,
     text: input.text,

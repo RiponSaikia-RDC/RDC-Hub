@@ -41,6 +41,9 @@ const userSelect = {
   plantId: true,
   createdAt: true,
   plant: true,
+  // Safe to expose — the actual token (gmailRefreshTokenEnc) never is.
+  gmailConnectedEmail: true,
+  gmailConnectedAt: true,
 } as const;
 
 // Admin: full user list. Everyone else: a lightweight list of members

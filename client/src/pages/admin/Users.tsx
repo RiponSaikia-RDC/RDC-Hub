@@ -180,6 +180,7 @@ export function Users() {
                 <th className="px-4 py-3">Username</th>
                 <th className="px-4 py-3">Role</th>
                 <th className="px-4 py-3">Plant</th>
+                <th className="px-4 py-3">Gmail (send as self)</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3"></th>
               </tr>
@@ -215,6 +216,20 @@ export function Users() {
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
+                  </td>
+                  <td className="px-4 py-3">
+                    {u.role === "PLANT_STAFF" ? (
+                      <span className="text-xs text-slate-400">—</span>
+                    ) : u.gmailConnectedEmail ? (
+                      <span className="text-xs text-emerald-700" title={`Connected ${u.gmailConnectedAt ? new Date(u.gmailConnectedAt).toLocaleString() : ""}`}>
+                        ✓ {u.gmailConnectedEmail}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-amber-700">
+                        Not connected — run{" "}
+                        <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px]">npm run gmail:connect -- {u.username}</code>
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-col items-start gap-1">
@@ -256,7 +271,7 @@ export function Users() {
                 </tr>
                 {pwUserId === u.id && (
                   <tr className="bg-slate-50">
-                    <td colSpan={6} className="px-4 py-3">
+                    <td colSpan={7} className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-slate-600">New password for {u.username}:</span>
                         <input

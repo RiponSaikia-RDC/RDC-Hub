@@ -99,7 +99,7 @@ export function RequestDetail() {
       // together with the reply — see requests.ts's POST /:id/comments)
       // as soon as at least one file is picked. bodyHtml carries the
       // formatting; body is the plain-text fallback / search text.
-      type CommentResult = { emailDelivery?: { status: "sent" | "failed"; error?: string } | null };
+      type CommentResult = { emailDelivery?: { status: "sent" | "failed"; error?: string; warning?: string } | null };
       let result: CommentResult;
       if (commentFiles.length > 0) {
         const form = new FormData();
@@ -125,6 +125,8 @@ export function RequestDetail() {
             result.emailDelivery.error ? ` (${result.emailDelivery.error})` : ""
           }. They have not received it — try again or contact them another way.`,
         });
+      } else if (result?.emailDelivery?.warning) {
+        setReplyNotice({ type: "warn", text: result.emailDelivery.warning });
       }
       await load();
     } catch (err) {

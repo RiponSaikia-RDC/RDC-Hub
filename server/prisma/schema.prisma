@@ -58,6 +58,14 @@ model User {
   plantId      Int?
   createdAt    DateTime @default(now())
 
+  // Per-person Gmail "send as yourself" — see server/src/lib/gmail.ts and
+  // server/src/scripts/gmailConnectUser.ts. Encrypted at rest (AES-256-GCM,
+  // see lib/tokenCrypto.ts); gmailConnectedEmail is the plaintext address
+  // confirmed at connect time, safe to show in the admin UI as-is.
+  gmailRefreshTokenEnc String?
+  gmailConnectedEmail  String?
+  gmailConnectedAt     DateTime?
+
   plant                Plant?               @relation(fields: [plantId], references: [id])
   queryTypeAssignments QueryTypeAssignment[]
   requestsSubmitted    ServiceRequest[]      @relation("Requester")

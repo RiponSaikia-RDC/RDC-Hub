@@ -229,7 +229,14 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
 
   const comment = await prisma.comment.create({
     data: { srId: id, authorId: req.user!.id, body, bodyHtml: replyHtml || null },
-    include: { author: { select: { id: true, name: true, role: true } }, attachments: true },
+    include: { author: { select: { id: true, name: true, role: true, email: true } }, attachments: true },
+  });
+  // Fetched separately (never on `comment`, which is returned to the
+  // client as-is below) so the encrypted token blob never leaves the
+  // server.
+  const sender = await prisma.user.findUnique({
+    where: { id: req.user!.id },
+    select: { gmailRefreshTokenEnc: true },
   });
 
   // Files attached to this reply — same upload mechanics as
@@ -262,15 +269,15 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
   // prior conversation is quoted below the reply instead (see replyEmail.ts).
   // A send failure never blocks the in-app reply, but it IS reported back
   // in the response (emailDelivery, below) so the UI can warn.
-  let emailDelivery: { status: "sent" | "failed"; error?: string } | null = null;
+  let emailDelivery: { status: "sent" | "failed"; error?: string; sentAs?: string; warning?: string } | null = null;
   if (sr.source === "EMAIL" && sr.requester.email) {
     try {
       const hubEmail = (process.env.GMAIL_HUB_EMAIL || "").toLowerCase();
       // Cc list: the shared hub mailbox always (so it keeps a copy of every
-      // outbound reply — replies now go out from an individual's account,
-      // not the hub address, and aren't threaded), plus everyone who was on
-      // the original email's To/Cc, plus whatever the replying member added.
-      // Minus the primary requester, who's already the "To".
+      // outbound reply regardless of who sent it, and aren't threaded), plus
+      // everyone who was on the original email's To/Cc, plus whatever the
+      // replying member added. Minus the primary requester, who's already
+      // the "To".
       const autoCc = [...parseEmailList(sr.originalToRaw), ...parseEmailList(sr.originalCcRaw)];
       const manualCc = parseEmailList(parsed.data.cc);
       const cc = Array.from(new Set([hubEmail, ...autoCc, ...manualCc]))
@@ -322,16 +329,31 @@ router.post("/:id/comments", requireAuth, upload.array("files", 5), async (req, 
         trail,
       });
 
-      const { messageId } = await sendReply({
+      const { messageId, sentAs, fellBackToHub } = await sendReply({
         to: sr.requester.email,
         cc,
         subject: `[${sr.ticketNumber}] Re: ${sr.subject}`,
         text,
         html,
         attachments,
+        fromEmail: comment.author.email,
+        fromName: comment.author.name,
+        fromRefreshTokenEnc: sender?.gmailRefreshTokenEnc || undefined,
       });
       await prisma.serviceRequest.update({ where: { id }, data: { lastEmailMessageId: messageId } });
-      emailDelivery = { status: "sent" };
+      // Sent fine either way, but flag it when it didn't go out as the
+      // replying member themselves (e.g. their account's email isn't a
+      // real mailbox, or per-member sending isn't set up) so that doesn't
+      // silently go unnoticed.
+      emailDelivery = fellBackToHub
+        ? {
+            status: "sent",
+            sentAs,
+            warning: sender?.gmailRefreshTokenEnc
+              ? `Sent as ${sentAs} instead of ${comment.author.email} — the connected Gmail account couldn't be used. Ask an admin to run "npm run gmail:connect" again for this account.`
+              : `Sent as ${sentAs} instead of ${comment.author.email} — this account hasn't connected Gmail yet. Ask an admin to run "npm run gmail:connect" for it.`,
+          }
+        : { status: "sent", sentAs };
     } catch (err) {
       console.error(`[requests] Could not email reply for SR ${sr.ticketNumber}:`, err);
       emailDelivery = { status: "failed", error: err instanceof Error ? err.message : "Unknown error" };

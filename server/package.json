@@ -11,6 +11,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:generate": "prisma generate",
     "gmail:auth": "tsx src/scripts/gmailAuth.ts",
+    "gmail:connect": "tsx src/scripts/gmailConnectUser.ts",
     "gmail:diag": "tsx src/scripts/gmailDiag.ts",
     "backfill:bodyhtml": "tsx src/scripts/backfillBodyHtml.ts"
   },

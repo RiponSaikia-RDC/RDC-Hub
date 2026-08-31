@@ -159,16 +159,22 @@ back to the sender (`server/src/lib/gmail.ts`'s `sendReply`), threaded
 under the original conversation; a further reply from the sender is
 appended to the same ticket as a new comment.
 
-There are two ways to authorize the hub mailbox — pick one:
+This covers two separate things: **reading the shared inbox** (Options A
+and B below — pick one), and **sending each reply as whoever wrote it**
+(its own section further down, works under either option).
 
-### Option A: Workspace service account (recommended for `distribution@rdc.in`)
+There are two ways to authorize reading the shared hub mailbox — pick one:
+
+### Option A: Workspace service account (needs Workspace super admin access)
 
 Since `distribution@rdc.in` lives on the company's Google Workspace
-domain, this is the better option: **replies send as `distribution@rdc.in`
-itself** (no "send as" alias needed), and there's **no refresh token to
-expire** — nothing to re-run every ~7 days. It needs a one-time setup by
-whoever has Google Workspace Admin access for `rdc.in`, plus Cloud Console
-access (both can be the same person as the OAuth option below):
+domain, this is the more robust option for reading the shared inbox:
+there's **no refresh token to expire** — nothing to re-run every ~7 days.
+It needs a one-time setup by whoever has Google Workspace Admin access for
+`rdc.in`, plus Cloud Console access (both can be the same person as the
+OAuth option below). **Currently not in use** (blocked on Workspace admin
+access) — the app is running on Option B below instead; these steps are
+here for whenever that access becomes available:
 
 1. In [console.cloud.google.com](https://console.cloud.google.com), create
    (or reuse) a project, then **APIs & Services > Library**: enable the
@@ -190,7 +196,14 @@ access (both can be the same person as the OAuth option below):
    ```
    GMAIL_SERVICE_ACCOUNT_KEY_PATH=./gmail-service-account.json
    GMAIL_HUB_EMAIL=distribution@rdc.in
+   GMAIL_INBOX_ACCOUNT=ripon.saikia@rdc.in
    ```
+   `GMAIL_INBOX_ACCOUNT` is the real mailbox to read incoming mail from —
+   needed because `distribution@rdc.in` is a Google Group, not a real
+   mailbox itself, so the service account can't read "its" inbox directly;
+   it reads whichever real mailbox the group actually forwards into
+   instead. Leave it unset if `GMAIL_HUB_EMAIL` is ever a real dedicated
+   mailbox rather than a group.
    (Leave `GMAIL_CLIENT_ID`/`GMAIL_CLIENT_SECRET`/`GMAIL_REFRESH_TOKEN`
    blank — they're not used when a service account key is set.)
 6. Restart the server. Startup logs confirm whether email intake is
@@ -231,6 +244,48 @@ token — it takes about two minutes. The server logs loudly (and Admin >
 Overview shows it) when auth fails, so this isn't a silent failure. This
 is exactly what Option A avoids.
 
+### Replies send as the logged-in member
+
+Independent of which option above reads the shared inbox: a reply typed
+in the Hub can be sent as the individual Member/Admin who wrote it,
+landing in their own Sent folder, rather than from the generic hub
+identity — currently done via a one-time **per-person connect**, since
+domain-wide delegation (which would make this automatic for everyone) is
+blocked on Workspace admin access (see Option A above).
+
+**One-time setup per person** (an admin runs this, with the teammate
+present to sign in):
+
+```
+cd server
+npm run gmail:connect -- <their-hub-username>
+```
+
+This prints a Google sign-in URL — have them open it and sign in as
+**themselves** (their own `rdc.in` account), approve access, and the
+script stores their connection. It refuses to save if they accidentally
+sign into an account that doesn't match their Hub email, so there's no
+risk of silently connecting the wrong mailbox. Admin > Users shows each
+Member/Admin's connection status (✓ connected address, or not-connected
+with a reminder of the exact command to run).
+
+Re-run the same command any time to reconnect someone (e.g. after
+`JWT_SECRET` is rotated — see its comment in `.env` — which also
+invalidates stored connections, since it's used to encrypt them).
+
+If a Member/Admin hasn't connected (or their connection stops working),
+their replies still send — just from the shared hub identity instead of
+them — and the Hub shows an amber warning under the reply box saying so.
+Nothing fails silently.
+
+**Once you have a real domain with HTTPS** (see "Moving to the company
+server" / "Hosting as a standalone public site" above), this can be
+upgraded to a self-service "Connect Gmail" button each person clicks
+inside the Hub itself, instead of an admin running a command for them —
+same underlying storage, just a nicer front door. Ask if/when you want
+that built; it can't work on today's plain-HTTP LAN setup because Google
+won't allow a raw IP address as an OAuth redirect target over HTTP.
+
 Routing is controlled from **Admin > Query Types**: give each query type
 comma-separated keywords, and mark exactly one as the "email default" —
 the catch-all for messages that match no keywords. Senders don't need to
@@ -250,7 +305,10 @@ matching from their very first email).
    pre-register known plant staff (role = Plant Staff) with their email and
    home plant so their tickets are matched to the right plant from their
    first email — otherwise one is created automatically the first time they
-   write in.
+   write in. **A Member/Admin's email must be their own real `rdc.in`
+   mailbox** — after `npm run gmail:connect` for them (see [Email intake
+   (Gmail)](#email-intake-gmail)), that's the address their replies send
+   from.
 5. **Assignments**: check the boxes to give each Member rights to the
    query types they should handle. New requests auto-route to whichever
    assigned member currently has the fewest open requests.
