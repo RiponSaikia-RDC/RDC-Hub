@@ -225,8 +225,8 @@ export function Users() {
                         ✓ {u.gmailConnectedEmail}
                       </span>
                     ) : (
-                      <span className="text-xs text-amber-700">
-                        Not connected — run{" "}
+                      <span className="text-xs text-slate-500">
+                        Not connected — replies send from the shared inbox instead. To connect:{" "}
                         <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px]">npm run gmail:connect -- {u.username}</code>
                       </span>
                     )}
